@@ -8,6 +8,7 @@ import { Command } from 'commander';
 import pkg from '../package.json' with { type: 'json' };
 import { bundle } from './bundle.ts';
 import { check } from './check.ts';
+import { writeWorkflows } from './ci.ts';
 import { writeGenerated } from './codegen.ts';
 import { runInteractive } from './convex-cli.ts';
 import { build, testUpgrade } from './docker.ts';
@@ -56,7 +57,9 @@ program
   .option('--docker', 'also write Dockerfile, .dockerignore and compose.yaml')
   .option('--no-docker', "don't ask about Docker files")
   .option('--no-install', "don't install missing packages")
-  .action(async (options: { docker?: boolean; install: boolean }) => {
+  .option('--ci', 'also write GitHub Actions workflows (verify on pull requests, deploy on push, image on tags)')
+  .option('--no-ci', "don't ask about workflows")
+  .action(async (options: { docker?: boolean; install: boolean; ci?: boolean }) => {
     const project = findProject();
     p.intro('convex-release init');
     if (!existsSync(join(project.root, 'package.json'))) throw new Error('No package.json here. Run this in your Convex project.');
@@ -93,6 +96,18 @@ program
       const written = writeDockerFiles(project);
       if (written.length > 0) p.log.success(`Wrote ${written.join(', ')}`);
       else p.log.info('Docker files already exist; left them as they are.');
+    }
+
+    let ci = options.ci;
+    if (ci === undefined && interactive) {
+      const answer = await p.confirm({ message: 'Also write GitHub Actions workflows?', initialValue: true });
+      ci = !p.isCancel(answer) && answer;
+    }
+    if (ci) {
+      const withImage = existsSync(join(project.root, 'Dockerfile'));
+      const written = writeWorkflows(project, detectPackageManager(project.root), withImage);
+      if (written.length > 0) p.log.success(`Wrote ${written.join(', ')}. Add the CONVEX_DEPLOY_KEY secret (or the self-hosted ones) before the first deploy.`);
+      else p.log.info('The workflows already exist; left them as they are.');
     }
 
     p.outro('Next: `convex-release new "what it does"` for a migration, `convex-release dev` instead of `convex dev`.');

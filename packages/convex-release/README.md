@@ -13,7 +13,7 @@ It builds on [`@convex-dev/migrations`](https://www.convex.dev/components/migrat
 - [What a release does](#what-a-release-does)
 - [Commands](#commands)
 - [Self-hosted images](#self-hosted-images)
-- [Testing upgrades in CI](#testing-upgrades-in-ci)
+- [CI](#ci)
 - [Limits](#limits)
 
 ## Quick start
@@ -92,18 +92,21 @@ If a migration throws, the release stops after step 3 and reports the error. You
 
 | Command                       | What it does                                                                                                                                  |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `init`                        | Sets up the packages, the migrations component and, with `--docker`, the Docker files.                                                        |
+| `init`                        | Sets up the packages and the migrations component. `--docker` adds the Docker files, `--ci` the GitHub Actions workflows.                     |
 | `new <name> --table <table>`  | Creates the next numbered migration.                                                                                                          |
 | `dev`                         | Releases to your dev deployment, then runs `convex dev`. `--once` stops after the release.                                                    |
 | `deploy`                      | Releases to the deployment `convex deploy` would use: prod, the one a `CONVEX_DEPLOY_KEY` names, a self-hosted URL, or `--deployment <name>`. |
 | `status`                      | Lists each migration as done, pending or failed on the deployment, with document counts.                                                      |
 | `check`                       | Dry-runs the schema against the deployment's data.                                                                                            |
+| `verify`                      | Compares the migrations with a base branch. Needs no deployment.                                                                              |
 | `codegen`                     | Rewrites `convex/migrations/_generated.ts`.                                                                                                   |
 | `build`                       | Builds the release image as `<package name>:<package version>`. `--oneshot` builds the one-shot variant.                                      |
 | `test-upgrade --from <image>` | Upgrades a previous release's data to this one in throwaway containers.                                                                       |
 | `bundle [dir]`                | Writes the files a release image applies. The image build runs it.                                                                            |
 
-`status` and `check` take `--prod` and `--deployment <name>` and default to your dev deployment.
+`status` and `check` take `--prod` and `--deployment <name>` and default to your dev deployment. Both take `--json`. `dev` and `deploy` take `--timeout <seconds>`: when it runs out, the command exits with code 1 and the migrations keep going on the deployment. The next release waits for them and finishes.
+
+Outside a terminal, the commands print one line per step instead of spinners, and `new` fails instead of asking for a missing argument. On GitHub Actions, `deploy` and `status` add a migrations table to the job summary, and `test-upgrade` adds the upgrade's duration and log.
 
 ## Self-hosted images
 
@@ -187,7 +190,21 @@ FROM ghcr.io/dev-marzahn/convex-release:0.1.0-runtime
 COPY --from=bundle /convex/app/ /convex/app/
 ```
 
-## Testing upgrades in CI
+## CI
+
+`convex-release init --ci` writes two GitHub Actions workflows. Edit them like any other workflow.
+
+`convex.yml` runs `verify` on pull requests and `deploy` on pushes to your default branch. Give it a `CONVEX_DEPLOY_KEY` secret, or `CONVEX_SELF_HOSTED_URL` and `CONVEX_SELF_HOSTED_ADMIN_KEY` for a self-hosted backend.
+
+`release-image.yml` comes along when the project has a `Dockerfile`. A tag like `v1.4.0` builds the image, upgrades the previous tag's image to it in throwaway containers, and only then pushes `ghcr.io/<owner>/<repo>:1.4.0` and `:latest` for amd64 and arm64.
+
+### Checking pull requests
+
+`verify` compares `convex/migrations/` with the pull request's target branch (`--base <ref>` picks another). It fails when a pull request removes, renames or renumbers a migration that already shipped, or adds one numbered below a shipped one, since deployments on older releases rely on that order. Editing a shipped migration gets a warning: deployments that already ran it won't run it again. `verify` reads git history alone, so it runs on pull requests from forks without secrets. Check out with `fetch-depth: 0` so the base branch is there.
+
+`check` answers a different question: does your schema accept the data on a real deployment? It needs that deployment's deploy key.
+
+### Testing upgrades
 
 `test-upgrade` starts your previous release on a fresh volume, runs your seed function, then starts the new release on the same volume and waits for it to become healthy:
 
@@ -198,6 +215,17 @@ bunx convex-release test-upgrade --from ghcr.io/you/my-app:1.3.0 \
 ```
 
 Without `--to`, it builds the current project first. `--seed` and `--check` take a function name and optional JSON arguments; `--check` should throw if the data looks wrong. Both images have to be combined images, since the test waits for their health check.
+
+### Rehearsing on real data
+
+`--snapshot` imports a `convex export` zip into the previous release before the upgrade, so you see how the migrations handle production data and how long they take:
+
+```sh
+npx convex export --prod --path prod.zip
+bunx convex-release test-upgrade --from ghcr.io/you/my-app:1.3.0 --snapshot prod.zip
+```
+
+The export holds the migrations component's records too, so the rehearsal runs the migrations production hasn't run yet and skips the rest. The tests use self-hosted exports; Convex Cloud exports share the format but haven't been tried yet. The snapshot holds your production data: keep it out of public artifacts, and don't run the job on pull requests from forks.
 
 ## Limits
 
