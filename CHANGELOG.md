@@ -4,6 +4,12 @@ This project follows [Epoch Semantic Versioning](https://antfu.me/posts/epoch-se
 
 ## Unreleased
 
+## 100.0.1 (2026-11-14)
+
+- The package declares the Node version it needs: 22.18.0 or later.
+- The README's first deploy command uses the scoped package name, `npx @dev-marzahn/convex-release deploy`.
+- Releases are published with npm provenance.
+
 ## 100.0.0 (2026-11-14)
 
 The first release.
