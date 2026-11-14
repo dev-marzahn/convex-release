@@ -1,11 +1,17 @@
 {
   "name": "@dev-marzahn/convex-release",
-  "version": "0.0.0",
-  "description": "Data migrations and self-hosted Docker releases for Convex apps.",
+  "version": "0.1.0",
+  "description": "Versioned data migrations, seeding and self-hosted Docker images for Convex apps.",
   "keywords": [
+    "cli",
     "convex",
+    "convex-dev",
+    "data-migrations",
     "docker",
     "migrations",
+    "preview-environments",
+    "schema",
+    "seed",
     "self-hosted"
   ],
   "homepage": "https://github.com/dev-marzahn/convex-release#readme",
@@ -13,6 +19,7 @@
     "url": "https://github.com/dev-marzahn/convex-release/issues"
   },
   "license": "MIT",
+  "author": "Leon Marzahn",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/dev-marzahn/convex-release.git",

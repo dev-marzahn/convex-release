@@ -1,0 +1,46 @@
+name: Bug report
+description: A command, a deploy or an image doesn't do what the README says.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command or container you ran, what you expected, and what it did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The smallest migration, seed or compose file that shows it, if you have one.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output
+      description: The command's output or the container's `[convex-release]` log lines.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: convex-release version
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where it runs
+      options:
+        - Convex Cloud (dev or deploy)
+        - Self-hosted, combined image
+        - Self-hosted, one-shot image
+        - Self-hosted, convex-release deploy
+        - CI (verify, check, test-upgrade)
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Package manager, convex version, OS
+      placeholder: pnpm 12, convex 1.50.0, Ubuntu 24.04

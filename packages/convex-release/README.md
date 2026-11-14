@@ -363,4 +363,4 @@ The export holds the migrations component's records too, so the rehearsal runs t
 
 ## License
 
-MIT
+[MIT](LICENSE). Issues, contributions and release notes live in the [GitHub repository](https://github.com/dev-marzahn/convex-release).

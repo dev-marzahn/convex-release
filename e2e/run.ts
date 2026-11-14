@@ -78,8 +78,11 @@ function buildApp(version: string, base: 'combined' | 'oneshot', tarball: string
     writeFileSync(join(context, 'package.json'), JSON.stringify(manifest, null, 2));
     if (setup && 'files' in setup) for (const [file, content] of Object.entries(setup.files)) writeFileSync(join(context, file), content);
     if (setup) {
-      // The lockfile, written by that package manager in a throwaway container.
-      docker('run', '--rm', '-v', `${context}:/app`, '-w', '/app', '-e', 'COREPACK_ENABLE_DOWNLOAD_PROMPT=0', 'node:24-trixie-slim', 'sh', '-c', setup.lock);
+      // The lockfile, written by that package manager in a throwaway container. The container runs as root, so on
+      // Linux it hands what it wrote back to this user, or the cleanup below fails with EACCES.
+      const owner = process.getuid ? `${process.getuid()}:${process.getgid!()}` : '';
+      const lock = owner ? `${setup.lock} && chown -R ${owner} /app` : setup.lock;
+      docker('run', '--rm', '-v', `${context}:/app`, '-w', '/app', '-e', 'COREPACK_ENABLE_DOWNLOAD_PROMPT=0', 'node:24-trixie-slim', 'sh', '-c', lock);
       rmSync(join(context, 'node_modules'), { recursive: true, force: true });
     }
     writeFileSync(join(context, 'Dockerfile'), `FROM ${PREFIX}:${base}\n`);
