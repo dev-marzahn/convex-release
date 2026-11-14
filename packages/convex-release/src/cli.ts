@@ -237,8 +237,9 @@ program
   .option('--to <image>', 'the new release (default: build this project first)')
   .option('--seed <function>', 'a function to run on --from to create data, e.g. testing:seed')
   .option('--check <function>', 'a function to run on --to afterwards; it should throw if the data is wrong')
+  .option('--snapshot <zip>', 'a `convex export` zip to import into --from first: a rehearsal on a copy of real data')
   .option('--timeout <seconds>', 'how long each release may take to become ready', '600')
-  .action(async (options: { from: string; to?: string; seed?: string; check?: string; timeout: string }) => {
+  .action(async (options: { from: string; to?: string; seed?: string; check?: string; snapshot?: string; timeout: string }) => {
     const project = findProject();
     let to = options.to;
     if (!to) {
@@ -248,9 +249,10 @@ program
     }
     const ui = progress();
     let current = '';
+    let result;
     try {
-      await testUpgrade(
-        { from: options.from, to, seed: options.seed, check: options.check, timeoutMs: seconds(options.timeout) },
+      result = await testUpgrade(
+        { from: options.from, to, seed: options.seed, check: options.check, snapshot: options.snapshot, project, timeoutMs: seconds(options.timeout) },
         {
           step: (message) => {
             current = message;
@@ -263,7 +265,20 @@ program
       ui.fail();
       throw err;
     }
-    ui.done(`${options.from} upgrades to ${to}`);
+    const took = `${Math.round(result.upgradeMs / 1000)}s`;
+    ui.done(`${options.from} upgrades to ${to} in ${took}`);
+    jobSummary(
+      [
+        `### Upgrade test: \`${options.from}\` → \`${to}\``,
+        '',
+        `Ready after ${took}${options.snapshot ? `, on a copy of \`${options.snapshot}\`` : ''}.`,
+        '',
+        '```',
+        ...result.log,
+        '```',
+        '',
+      ].join('\n'),
+    );
   });
 
 async function runRelease(project: Project, target: ReleaseTarget, timeoutMs?: number) {

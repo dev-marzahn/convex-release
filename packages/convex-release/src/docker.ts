@@ -2,12 +2,14 @@
 // release images. Shells out to the `docker` CLI the user already has.
 import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, rmSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
+import { convexBin } from './convex-cli.ts';
 import { ONESHOT_IMAGE } from './images.ts';
 import type { Project } from './project.ts';
+import { copyProject } from './relaxed.ts';
 
 export class DockerError extends Error {}
 
@@ -51,6 +53,14 @@ export interface UpgradeTestOptions {
   check?: string;
   /** How long each release may take to become ready. */
   timeoutMs?: number;
+  /**
+   * A `convex export` zip to import into `from` before upgrading: a rehearsal
+   * on a copy of real data. Includes the migrations component's records, so
+   * migrations the data already went through don't run again.
+   */
+  snapshot?: string;
+  /** For the snapshot import: the project whose `convex` CLI runs it. */
+  project?: Project;
 }
 
 export interface UpgradeTestEvents {
@@ -58,12 +68,19 @@ export interface UpgradeTestEvents {
   log: (line: string) => void;
 }
 
+export interface UpgradeTestResult {
+  /** How long `to` took from start to ready, migrations included. */
+  upgradeMs: number;
+  /** The release's own log lines from `to`. */
+  log: string[];
+}
+
 /**
- * Starts `from` on a fresh volume, optionally seeds it, then starts `to` on the
- * same volume and requires it to become healthy: the upgrade a user's
- * `docker compose up -d` would do. Cleans up after itself.
+ * Starts `from` on a fresh volume, optionally seeds it or imports a snapshot,
+ * then starts `to` on the same volume and requires it to become healthy: the
+ * upgrade a user's `docker compose up -d` would do. Cleans up after itself.
  */
-export async function testUpgrade(options: UpgradeTestOptions, events: UpgradeTestEvents): Promise<void> {
+export async function testUpgrade(options: UpgradeTestOptions, events: UpgradeTestEvents): Promise<UpgradeTestResult> {
   const id = randomBytes(4).toString('hex');
   const name = `convex-release-test-${id}`;
   const volume = `${name}-data`;
@@ -71,26 +88,76 @@ export async function testUpgrade(options: UpgradeTestOptions, events: UpgradeTe
   const timeoutMs = options.timeoutMs ?? 10 * 60_000;
   const start = (image: string) => {
     spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore' });
-    docker(['run', '-d', '--name', name, '-e', 'INSTANCE_NAME=release_test', '-e', `INSTANCE_SECRET=${secret}`, '-v', `${volume}:/convex/data`, image]);
+    // The API port goes to a random port on localhost, for the snapshot import.
+    docker([
+      'run',
+      '-d',
+      '--name',
+      name,
+      '-p',
+      '127.0.0.1::3210',
+      '-e',
+      'INSTANCE_NAME=release_test',
+      '-e',
+      `INSTANCE_SECRET=${secret}`,
+      '-v',
+      `${volume}:/convex/data`,
+      image,
+    ]);
   };
   try {
     events.step(`Starting ${options.from} on a fresh volume`);
     start(options.from);
     await waitHealthy(name, timeoutMs, events);
+    if (options.snapshot) {
+      events.step(`Importing ${basename(options.snapshot)}`);
+      importSnapshot(name, options.snapshot, options.project);
+    }
     if (options.seed) {
       events.step(`Seeding with ${options.seed}`);
       runFunction(name, options.seed);
     }
     events.step(`Upgrading to ${options.to}`);
+    const started = Date.now();
     start(options.to);
     await waitHealthy(name, timeoutMs, events);
+    const result = { upgradeMs: Date.now() - started, log: releaseLines(name) };
     if (options.check) {
       events.step(`Checking with ${options.check}`);
       runFunction(name, options.check);
     }
+    return result;
   } finally {
     spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore' });
     spawnSync('docker', ['volume', 'rm', volume], { stdio: 'ignore' });
+  }
+}
+
+/** `convex import --replace-all` into the container, with the project's CLI. */
+function importSnapshot(name: string, zip: string, project: Project | undefined) {
+  if (!project) throw new DockerError('Importing a snapshot needs the project, for its `convex` CLI.');
+  if (!existsSync(zip)) throw new DockerError(`No snapshot at ${zip}.`);
+  const port = docker(['port', name, '3210/tcp']).trim().split('\n')[0]!.split(':').at(-1);
+  const key = docker(['exec', name, './generate_admin_key.sh']).trim().split('\n').at(-1)!;
+  // A copy without env files: the project's own deployment config must not
+  // compete with the container's URL.
+  const copy = copyProject(project);
+  for (const env of ['.env', '.env.local']) rmSync(join(copy.project.root, env), { force: true });
+  try {
+    const result = spawnSync(process.execPath, [convexBin(project), 'import', '--replace-all', '-y', resolve(zip)], {
+      cwd: copy.project.root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CONVEX_SELF_HOSTED_URL: `http://127.0.0.1:${port}`,
+        CONVEX_SELF_HOSTED_ADMIN_KEY: key,
+        CONVEX_DEPLOYMENT: '',
+        CONVEX_DEPLOY_KEY: '',
+      },
+    });
+    if (result.status !== 0) throw new DockerError(`Importing the snapshot failed:\n${`${result.stdout}\n${result.stderr}`.trim()}`);
+  } finally {
+    copy.dispose();
   }
 }
 

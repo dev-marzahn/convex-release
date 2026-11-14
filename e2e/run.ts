@@ -281,6 +281,45 @@ const scenarios: Record<string, () => Promise<void>> = {
     expect((await check()).wellFormed === 200, 'data changed by the refused downgrade');
   },
 
+  /** `test-upgrade --snapshot`: a v3 deployment's export, rehearsed against v4 in throwaway containers. */
+  async rehearsal() {
+    await runCombined('v1', 'data');
+    await call('messages:seed', { chunk: 0, size: 500, authors: 25 });
+    const v3 = await runCombined('v3', 'data');
+    expect(v3.healthy, 'v3 failed');
+    const dir = mkdtempSync(join(tmpdir(), `${PREFIX}-snapshot-`));
+    const zip = join(dir, 'prod.zip');
+    try {
+      sh(join(ROOT, 'e2e/apps/v3/node_modules/.bin/convex'), ['export', '--path', zip], {
+        cwd: join(ROOT, 'e2e/apps/v3'),
+        env: { ...process.env, CONVEX_SELF_HOSTED_URL: URL, CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey(), CONVEX_DEPLOYMENT: '' },
+      });
+      removeAll();
+      const out = sh(
+        'node',
+        [
+          join(ROOT, 'packages/convex-release/dist/cli.mjs'),
+          'test-upgrade',
+          '--from',
+          `${PREFIX}-app:v3`,
+          '--to',
+          `${PREFIX}-app:v4`,
+          '--snapshot',
+          zip,
+          '--check',
+          'messages:userCount',
+        ],
+        { cwd: join(ROOT, 'e2e/apps/v4'), env: { ...process.env, CI: '1' } },
+      );
+      // The snapshot carries the migration records: only 0003 runs.
+      expect(out.includes('running: 2/3 migrations done') || out.includes('done: 3/3'), out);
+      expect(!out.includes('0/3'), `migrations from the snapshot ran again:\n${out}`);
+      log(`  ${out.trim().split('\n').at(-1)}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+
   async node() {
     await runCombined('v4', 'data');
     const out = await call<string>('nodeHash:sha256', { text: 'hi' });
