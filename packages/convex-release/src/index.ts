@@ -134,11 +134,12 @@ export function createRelease<DataModel extends GenericDataModel>(component: Mig
         args: {},
         handler: async (ctx): Promise<ReleaseStatus> => {
           // A finished migration this release doesn't know was shipped by a
-          // newer one: this is a downgrade.
+          // newer one: this is a downgrade. An unfinished one was renamed or
+          // deleted after it failed, and nothing runs it again.
           if (!options.allowUnknown) {
             const known = new Set(names);
             const recorded = await migrations.getStatus(ctx, { limit: 1000 });
-            const unknown = recorded.filter((s) => !known.has(s.name)).map((s) => s.name);
+            const unknown = recorded.filter((s) => s.isDone && !known.has(s.name)).map((s) => s.name);
             if (unknown.length > 0) {
               return {
                 state: 'failed',

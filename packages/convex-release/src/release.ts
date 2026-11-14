@@ -123,7 +123,9 @@ export async function release(project: Project, target: ReleaseTarget, events: R
   const copy = copyProject(project);
   try {
     copy.relaxSchema();
-    push(copy.project, target.push, ['--codegen', 'disable']);
+    // The first push that puts new code live, so it type-checks; pass 2
+    // pushes the same code.
+    push(copy.project, target.push, ['--codegen', 'disable'], { typecheck: true });
   } finally {
     copy.dispose();
   }

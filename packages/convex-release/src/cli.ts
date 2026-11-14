@@ -264,12 +264,12 @@ program
 
 program
   .command('build')
-  .description('Build the release image, tagged <package name>:<package version>.')
+  .description('Build the release image, tagged <name>:<version> from package.json (<name>-oneshot:<version> with --oneshot).')
   .option('-t, --tag <tag>', 'the image tag (default from package.json)')
   .option('--oneshot', 'build the one-shot image (releases to a separate backend) instead')
   .action((options: { tag?: string; oneshot?: boolean }) => {
     const project = findProject();
-    const tag = options.tag ?? appImageName(project, options.oneshot ? '-release' : '');
+    const tag = options.tag ?? appImageName(project, options.oneshot ? '-oneshot' : '');
     p.log.step(`Building ${tag}`);
     build(project, { tag, oneshot: options.oneshot });
     p.log.success(`Built ${tag}`);

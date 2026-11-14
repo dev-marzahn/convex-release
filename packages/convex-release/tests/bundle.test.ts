@@ -1,13 +1,13 @@
 // Bundles examples/basic for real with its installed `convex` CLI. Offline:
 // --write-push-request stops before contacting any server.
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { expect, test } from 'vite-plus/test';
 
-import { bundle } from '../src/bundle.ts';
+import { assertImageVersion, bundle } from '../src/bundle.ts';
 import { findProject } from '../src/project.ts';
 
 const example = fileURLToPath(new URL('../../../examples/basic', import.meta.url));
@@ -41,4 +41,12 @@ test('writes a strict and a validation-off push request that differ only in the 
     migrations: ['migrations/0001_rename_body_to_text', 'migrations/0002_add_length', 'migrations/0003_author_to_users'],
     seeds: true,
   });
+});
+
+test('refuses to bundle in an image of another convex-release version', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'convex-release-image-')), 'release-package.json');
+  writeFileSync(file, JSON.stringify({ version: '0.2.0' }));
+  expect(() => assertImageVersion('0.1.0', file)).toThrow('This image is convex-release 0.2.0, but the app has 0.1.0 installed');
+  expect(() => assertImageVersion('0.2.0', file)).not.toThrow();
+  expect(() => assertImageVersion('0.1.0', join(tmpdir(), 'missing.json'))).not.toThrow();
 });

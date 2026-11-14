@@ -7,9 +7,10 @@
 //   push.relaxed.json:  the same code with schema validation off, only when
 //                       there are migrations to run between the two pushes.
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import pkg from '../package.json' with { type: 'json' };
 import { writeGenerated } from './codegen.ts';
 import { convexBin } from './convex-cli.ts';
 import type { Project } from './project.ts';
@@ -30,7 +31,24 @@ export interface ReleaseManifest {
   seeds: boolean;
 }
 
+/** Written by images/Dockerfile into every release image. */
+export const IMAGE_PACKAGE_FILE = '/convex/release-package.json';
+
+/**
+ * In a release image, the app's convex-release writes the bundle and the
+ * image's entrypoint applies it, so both have to be the same version.
+ */
+export function assertImageVersion(ownVersion: string, imagePackageFile = IMAGE_PACKAGE_FILE): void {
+  if (!existsSync(imagePackageFile)) return;
+  const image = (JSON.parse(readFileSync(imagePackageFile, 'utf8')) as { version: string }).version;
+  if (image === ownVersion) return;
+  throw new Error(
+    `This image is convex-release ${image}, but the app has ${ownVersion} installed. Build FROM the ${ownVersion} image, or install @dev-marzahn/convex-release@${image}.`,
+  );
+}
+
 export function bundle(project: Project, outDir: string): BundleResult {
+  assertImageVersion(pkg.version);
   const { migrations, seeds } = writeGenerated(project);
   mkdirSync(outDir, { recursive: true });
   const manifest: ReleaseManifest = { migrations: migrations.map((m) => functionName(m.module)), seeds: (seeds?.length ?? 0) > 0 };

@@ -31,11 +31,11 @@ export type PushTarget = { kind: 'dev' } | { kind: 'deploy'; args: string[] };
 /**
  * Pushes the project's code: `convex dev --once` for the dev deployment, or
  * `convex deploy` for `--prod` / `--deployment`. The CLI's output is shown
- * only when it fails.
+ * only when it fails. `typecheck` keeps the CLI's default type check.
  */
-export function push(project: Project, target: PushTarget, extra: string[] = []): void {
-  const args =
-    target.kind === 'dev' ? ['dev', '--once', '--typecheck', 'disable', ...extra] : ['deploy', '-y', '--typecheck', 'disable', ...target.args, ...extra];
+export function push(project: Project, target: PushTarget, extra: string[] = [], { typecheck = false } = {}): void {
+  const check = typecheck ? [] : ['--typecheck', 'disable'];
+  const args = target.kind === 'dev' ? ['dev', '--once', ...check, ...extra] : ['deploy', '-y', ...check, ...target.args, ...extra];
   const result = spawnSync(process.execPath, [convexBin(project), ...args], {
     cwd: project.root,
     encoding: 'utf8',

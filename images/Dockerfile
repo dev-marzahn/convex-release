@@ -23,6 +23,8 @@ FROM ${BACKEND_IMAGE} AS backend
 
 FROM ${BACKEND_IMAGE} AS combined-runtime
 COPY packages/convex-release/dist/image/entrypoint.mjs /convex/release.mjs
+# `bundle` refuses an app whose convex-release version differs from this one.
+COPY packages/convex-release/package.json /convex/release-package.json
 COPY images/onbuild.sh /convex/onbuild.sh
 ENTRYPOINT ["node", "/convex/release.mjs"]
 HEALTHCHECK --interval=5s --start-period=10s --retries=1000000 CMD test -f /tmp/convex-ready
@@ -40,6 +42,7 @@ FROM ${NODE_IMAGE} AS oneshot-runtime
 # Derives the admin key from the backend's INSTANCE_NAME and INSTANCE_SECRET.
 COPY --from=backend /convex/generate_key /convex/generate_key
 COPY packages/convex-release/dist/image/entrypoint.mjs /convex/release.mjs
+COPY packages/convex-release/package.json /convex/release-package.json
 COPY images/onbuild.sh /convex/onbuild.sh
 WORKDIR /convex
 ENTRYPOINT ["node", "/convex/release.mjs"]
