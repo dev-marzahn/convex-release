@@ -41,9 +41,10 @@ export function deployTarget(project: Project, deployment?: string): ReleaseTarg
   return { push: { kind: 'deploy', args: [] }, runArgs: fromEnv ? [] : ['--prod'] };
 }
 
-/** The variables the `convex` CLI reads: `.env`, then `.env.local`, then the shell. */
+/** The variables the `convex` CLI reads: `.env`, then `.env.local`, then the shell. Empty counts as unset. */
 function projectEnv(project: Project): Record<string, string | undefined> {
-  return { ...readEnvFile(project, '.env'), ...readEnvFile(project, '.env.local'), ...process.env };
+  const shell = Object.fromEntries(Object.entries(process.env).filter(([, value]) => value));
+  return { ...readEnvFile(project, '.env'), ...readEnvFile(project, '.env.local'), ...shell };
 }
 
 /**
