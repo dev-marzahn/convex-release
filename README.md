@@ -217,7 +217,7 @@ For a self-hosted backend, pick one way to deploy: an image, or `convex-release 
 Your `Dockerfile` is one line:
 
 ```dockerfile
-FROM ghcr.io/dev-marzahn/convex-release:1.0.0
+FROM ghcr.io/dev-marzahn/convex-release:100.0.0
 ```
 
 The build installs your dependencies with the package manager your lockfile belongs to: npm, pnpm, Yarn or Bun, and Bun when there's no lockfile. It then bundles your `convex/` folder. Neither your source nor `node_modules` ends up in the image.
@@ -256,7 +256,7 @@ If a migration throws in the container, the container stops its backend and exit
 
 ### One-shot image
 
-To keep the stock Convex backend in its own container, build the one-shot variant with `convex-release build --oneshot`, or with `FROM ghcr.io/dev-marzahn/convex-release-oneshot:1.0.0`. It deploys your app to the backend at `CONVEX_URL` and exits:
+To keep the stock Convex backend in its own container, build the one-shot variant with `convex-release build --oneshot`, or with `FROM ghcr.io/dev-marzahn/convex-release-oneshot:100.0.0`. It deploys your app to the backend at `CONVEX_URL` and exits:
 
 ```yaml
 services:
@@ -291,7 +291,7 @@ The one-shot container derives the admin key from the backend's `INSTANCE_NAME` 
 
 ### Your own Dockerfile
 
-The `-runtime` tags (`convex-release:1.0.0-runtime`, `convex-release-oneshot:1.0.0-runtime`) skip the automatic build step, for a monorepo or any build you want to control. The image reads its bundle from `/convex/app`:
+The `-runtime` tags (`convex-release:100.0.0-runtime`, `convex-release-oneshot:100.0.0-runtime`) skip the automatic build step, for a monorepo or any build you want to control. The image reads its bundle from `/convex/app`:
 
 ```dockerfile
 FROM oven/bun:1.4.4 AS deps
@@ -299,12 +299,12 @@ WORKDIR /app
 COPY . .
 RUN bun install --frozen-lockfile
 
-FROM ghcr.io/dev-marzahn/convex-release:1.0.0-runtime AS bundle
+FROM ghcr.io/dev-marzahn/convex-release:100.0.0-runtime AS bundle
 COPY --from=deps /app /app
 WORKDIR /app
 RUN node_modules/.bin/convex-release bundle /convex/app
 
-FROM ghcr.io/dev-marzahn/convex-release:1.0.0-runtime
+FROM ghcr.io/dev-marzahn/convex-release:100.0.0-runtime
 COPY --from=bundle /convex/app/ /convex/app/
 ```
 
@@ -381,7 +381,7 @@ The export holds the migrations component's records too, so the rehearsal runs t
 
 ## Versioning
 
-Releases follow [Epoch Semantic Versioning](https://antfu.me/posts/epoch-semver): the first number is `EPOCH * 1000 + MAJOR`, and any change to it can break your app. Minor and patch releases don't. See the [changelog](https://github.com/dev-marzahn/convex-release/blob/main/CHANGELOG.md).
+Releases follow [Epoch Semantic Versioning](https://antfu.me/posts/epoch-semver): the first number is `EPOCH * 100 + MAJOR`, starting at epoch 1, and any change to it can break your app. Minor and patch releases don't. See the [changelog](https://github.com/dev-marzahn/convex-release/blob/main/CHANGELOG.md).
 
 ## Contributing
 
