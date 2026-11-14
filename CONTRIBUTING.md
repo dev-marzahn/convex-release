@@ -2,6 +2,8 @@
 
 Bug reports, fixes and pull requests are welcome. For a larger change, open an issue first so we can agree on the approach before you write it.
 
+By sending a pull request, you agree to license your contribution under the [MPL-2.0](LICENSE), the license of this repository.
+
 ## Setup
 
 You need [Bun](https://bun.sh) 1.4, Node 22.18 or later and, for the end-to-end tests, Docker.

@@ -87,6 +87,8 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
+          # Every image carries Convex backend code (FSL-1.1-Apache-2.0): the
+          # combined ones the whole backend, the one-shot ones its key generator.
           for target in combined combined-runtime oneshot oneshot-runtime; do
             case $target in
               combined) name=convex-release suffix= ;;
@@ -100,7 +102,7 @@ jobs:
               --platform linux/amd64,linux/arm64 \
               --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
               --label "org.opencontainers.image.version=$VERSION" \
-              --label "org.opencontainers.image.licenses=MIT" \
+              --label "org.opencontainers.image.licenses=MPL-2.0 AND FSL-1.1-Apache-2.0" \
               -t "ghcr.io/dev-marzahn/$name:$VERSION$suffix" \
               -t "ghcr.io/dev-marzahn/$name:$latest"
           done

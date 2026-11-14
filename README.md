@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@dev-marzahn/convex-release)](https://www.npmjs.com/package/@dev-marzahn/convex-release)
 [![CI](https://github.com/dev-marzahn/convex-release/actions/workflows/ci.yml/badge.svg)](https://github.com/dev-marzahn/convex-release/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/dev-marzahn/convex-release/blob/main/LICENSE)
+[![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/dev-marzahn/convex-release/blob/main/LICENSE)
 
 Versioned data migrations for [Convex](https://convex.dev), and Docker images that run them when a self-hosted app starts.
 
@@ -389,4 +389,6 @@ See [CONTRIBUTING.md](https://github.com/dev-marzahn/convex-release/blob/main/CO
 
 ## License
 
-[MIT](https://github.com/dev-marzahn/convex-release/blob/main/LICENSE)
+[MPL-2.0](https://github.com/dev-marzahn/convex-release/blob/main/LICENSE). You can use convex-release in closed-source apps and ship it in your images. If you distribute a changed version of its own files, publish those changes under MPL-2.0. Versions up to 100.0.0 were released under MIT.
+
+The images also contain code from the [Convex backend](https://github.com/get-convex/convex-backend), which is licensed under FSL-1.1-Apache-2.0: the whole backend in the combined images, and its admin key generator in the one-shot images.
