@@ -34,6 +34,12 @@ describe('missingPackages', () => {
     const root = dir({ 'package.json': JSON.stringify({ devDependencies: { '@convex-dev/migrations': '^0.3.8' } }) });
     expect(missingPackages(root)).toEqual(['@dev-marzahn/convex-release']);
   });
+
+  test("adds convex-helpers for Yarn, which doesn't install peer dependencies", () => {
+    const root = dir({ 'package.json': JSON.stringify({ dependencies: { '@convex-dev/migrations': '^0.3.8', '@dev-marzahn/convex-release': '^0.1.0' } }) });
+    expect(missingPackages(root, 'yarn')).toEqual(['convex-helpers']);
+    expect(missingPackages(root, 'pnpm')).toEqual([]);
+  });
 });
 
 describe('ensureConvexConfig', () => {

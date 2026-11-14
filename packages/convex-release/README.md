@@ -186,7 +186,7 @@ Your `Dockerfile` is one line:
 FROM ghcr.io/dev-marzahn/convex-release:0.1.0
 ```
 
-The build installs your dependencies (Bun, or npm when you have a `package-lock.json`) and bundles your `convex/` folder. Neither your source nor `node_modules` ends up in the image.
+The build installs your dependencies with the package manager your lockfile belongs to (npm, pnpm, Yarn or Bun; Bun without a lockfile) and bundles your `convex/` folder. Neither your source nor `node_modules` ends up in the image. Yarn needs `nodeLinker: node-modules`, and since Yarn doesn't install peer dependencies, `convex-helpers` in your dependencies; `init` adds it.
 
 The image tag has to match the `@dev-marzahn/convex-release` version you have installed, and the build fails when it doesn't. `init --docker` writes the matching tag; change it when you update the package.
 

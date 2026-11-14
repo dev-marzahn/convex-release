@@ -20,10 +20,14 @@ export function detectPackageManager(root: string, userAgent = process.env.npm_c
   return 'npm';
 }
 
-export function missingPackages(root: string): string[] {
+/**
+ * The packages to install. Yarn doesn't install peer dependencies, so it also
+ * gets `convex-helpers`, which `@convex-dev/migrations` needs.
+ */
+export function missingPackages(root: string, pm: PackageManager = 'npm'): string[] {
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as Record<string, Record<string, string> | undefined>;
   const have = { ...manifest.dependencies, ...manifest.devDependencies };
-  return PACKAGES.filter((name) => !have[name]);
+  return [...PACKAGES, ...(pm === 'yarn' ? ['convex-helpers'] : [])].filter((name) => !have[name]);
 }
 
 export function installPackages(root: string, pm: PackageManager, names: string[]): void {

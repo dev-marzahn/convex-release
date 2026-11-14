@@ -34,8 +34,11 @@ FROM combined-runtime AS combined
 # neither it nor node_modules ends up in the app image: just /convex/app.
 ONBUILD RUN --mount=type=bind,target=/convex/src,rw \
     --mount=type=bind,from=oven/bun:1.4.4,source=/usr/local/bin/bun,target=/usr/local/bin/bun \
+    --mount=type=bind,from=node:24-trixie-slim,source=/usr/local/lib/node_modules/corepack,target=/opt/corepack \
     --mount=type=cache,target=/root/.bun/install/cache \
     --mount=type=cache,target=/root/.npm \
+    --mount=type=cache,target=/root/.cache/node/corepack \
+    --mount=type=cache,target=/root/.local/share/pnpm/store \
     /convex/onbuild.sh
 
 FROM ${NODE_IMAGE} AS oneshot-runtime
@@ -50,6 +53,9 @@ ENTRYPOINT ["node", "/convex/release.mjs"]
 FROM oneshot-runtime AS oneshot
 ONBUILD RUN --mount=type=bind,target=/convex/src,rw \
     --mount=type=bind,from=oven/bun:1.4.4,source=/usr/local/bin/bun,target=/usr/local/bin/bun \
+    --mount=type=bind,from=node:24-trixie-slim,source=/usr/local/lib/node_modules/corepack,target=/opt/corepack \
     --mount=type=cache,target=/root/.bun/install/cache \
     --mount=type=cache,target=/root/.npm \
+    --mount=type=cache,target=/root/.cache/node/corepack \
+    --mount=type=cache,target=/root/.local/share/pnpm/store \
     /convex/onbuild.sh

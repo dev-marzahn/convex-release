@@ -38,23 +38,55 @@ function buildImages() {
   }
 }
 
-/** A standalone build context for a fixture app, as a user's repo would look. */
-function buildApp(version: string, base: 'combined' | 'oneshot', tarball: string) {
+/** Package managers the image build supports besides Bun, with the command that writes their lockfile. */
+const PACKAGE_MANAGERS = {
+  npm: { lock: 'npm install --package-lock-only --no-audit --no-fund' },
+  // pnpm refuses dependency build scripts nobody approved, as it would on the user's machine.
+  pnpm: { packageManager: 'pnpm@12.18.0', lock: 'corepack pnpm install --lockfile-only', files: { 'pnpm-workspace.yaml': 'allowBuilds:\n  esbuild: true\n' } },
+  // Yarn doesn't install peer dependencies; `init` adds convex-helpers for it.
+  yarn1: { packageManager: 'yarn@1.22.22', lock: 'corepack yarn install --ignore-scripts', peers: { 'convex-helpers': '^0.1.115' } },
+  yarn4: {
+    packageManager: 'yarn@4.18.1',
+    lock: 'corepack yarn install --mode=update-lockfile',
+    files: { '.yarnrc.yml': 'nodeLinker: node-modules\n' },
+    peers: { 'convex-helpers': '^0.1.115' },
+  },
+} as const;
+type PackageManager = keyof typeof PACKAGE_MANAGERS;
+
+/**
+ * A standalone build context for a fixture app, as a user's repo would look.
+ * With `pm`, the context gets that package manager's lockfile, and the image
+ * is tagged `<version>-<pm>`.
+ */
+function buildApp(version: string, base: 'combined' | 'oneshot', tarball: string, pm?: PackageManager) {
   const context = mkdtempSync(join(tmpdir(), `${PREFIX}-${version}-`));
   try {
     cpSync(join(ROOT, 'e2e/apps', version), context, { recursive: true, filter: (src) => !src.includes('node_modules') });
     cpSync(tarball, join(context, 'convex-release.tgz'));
     const catalog = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { catalog: Record<string, string> }).catalog;
-    const manifest = JSON.parse(readFileSync(join(context, 'package.json'), 'utf8')) as Record<string, Record<string, string>>;
+    const manifest = JSON.parse(readFileSync(join(context, 'package.json'), 'utf8')) as Record<string, unknown>;
     for (const field of ['dependencies', 'devDependencies']) {
-      for (const [name, range] of Object.entries(manifest[field] ?? {})) {
-        manifest[field]![name] = range === 'workspace:*' ? 'file:./convex-release.tgz' : range === 'catalog:' ? catalog[name]! : range;
+      const deps = (manifest[field] ?? {}) as Record<string, string>;
+      for (const [name, range] of Object.entries(deps)) {
+        deps[name] = range === 'workspace:*' ? 'file:./convex-release.tgz' : range === 'catalog:' ? catalog[name]! : range;
       }
     }
+    const setup = pm ? PACKAGE_MANAGERS[pm] : undefined;
+    if (setup && 'packageManager' in setup) manifest.packageManager = setup.packageManager;
+    if (setup && 'peers' in setup) Object.assign(manifest.dependencies as Record<string, string>, setup.peers);
     writeFileSync(join(context, 'package.json'), JSON.stringify(manifest, null, 2));
+    if (setup && 'files' in setup) for (const [file, content] of Object.entries(setup.files)) writeFileSync(join(context, file), content);
+    if (setup) {
+      // The lockfile, written by that package manager in a throwaway container.
+      docker('run', '--rm', '-v', `${context}:/app`, '-w', '/app', '-e', 'COREPACK_ENABLE_DOWNLOAD_PROMPT=0', 'node:24-trixie-slim', 'sh', '-c', setup.lock);
+      rmSync(join(context, 'node_modules'), { recursive: true, force: true });
+    }
     writeFileSync(join(context, 'Dockerfile'), `FROM ${PREFIX}:${base}\n`);
     writeFileSync(join(context, '.dockerignore'), 'node_modules\n');
-    docker('build', '-q', '-t', `${PREFIX}-app:${version}${base === 'oneshot' ? '-oneshot' : ''}`, context);
+    const tag = `${PREFIX}-app:${version}${base === 'oneshot' ? '-oneshot' : ''}${pm ? `-${pm}` : ''}`;
+    // --progress=plain puts the build step's output in the error, if it fails.
+    docker('build', ...(pm ? ['--progress=plain'] : ['-q']), '-t', tag, context);
   } finally {
     rmSync(context, { recursive: true, force: true });
   }
@@ -395,6 +427,19 @@ const scenarios: Record<string, () => Promise<void>> = {
       log(`  snapshot: imported and migrated, ${JSON.stringify(summary)}`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  },
+
+  /** The image build installs with the lockfile's package manager: npm, pnpm, Yarn 1 and Yarn 4. */
+  async packageManagers() {
+    for (const pm of Object.keys(PACKAGE_MANAGERS) as PackageManager[]) {
+      buildApp('v4', 'combined', tarball, pm);
+      const run = await runCombined(`v4-${pm}`, `pm-${pm}`);
+      expect(run.healthy, `${pm} build didn't become healthy:\n${run.log.join('\n')}`);
+      await write('v4', 20);
+      const summary = await check();
+      expect(summary.wellFormed === 20, `${pm}: ${JSON.stringify(summary)}`);
+      log(`  ${pm}: built and deployed`);
     }
   },
 

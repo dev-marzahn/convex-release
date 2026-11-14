@@ -70,9 +70,9 @@ program
     if (!existsSync(join(project.root, 'package.json'))) throw new Error('No package.json here. Run this in your Convex project.');
     mkdirSync(project.functionsDir, { recursive: true });
 
-    const missing = missingPackages(project.root);
+    const pm = detectPackageManager(project.root);
+    const missing = missingPackages(project.root, pm);
     if (missing.length > 0 && options.install) {
-      const pm = detectPackageManager(project.root);
       p.log.step(`Installing ${missing.join(', ')} with ${pm}`);
       installPackages(project.root, pm, missing);
     } else if (missing.length > 0) {
