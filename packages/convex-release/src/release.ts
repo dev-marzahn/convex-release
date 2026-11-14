@@ -74,7 +74,7 @@ function assertConfigured(project: Project) {
 
 /**
  * Refuses before anything is pushed when the deployment has finished
- * migrations this checkout doesn't have: a newer release shipped them.
+ * migrations this checkout doesn't have: a newer version shipped them.
  */
 function assertNotDowngrade(project: Project, runArgs: string[]) {
   let rows: MigrationRow[];
@@ -87,7 +87,7 @@ function assertNotDowngrade(project: Project, runArgs: string[]) {
   const newer = rows.filter((r) => r.unknown && r.state === 'done').map((r) => r.name);
   if (newer.length > 0) {
     throw new Error(
-      `The deployment has migrations this checkout doesn't (${newer.join(', ')}): a newer release ran them. Update your checkout; nothing was pushed.`,
+      `The deployment has migrations this checkout doesn't (${newer.join(', ')}): a newer version of the app ran them. Update your checkout; nothing was pushed.`,
     );
   }
 }
@@ -160,7 +160,7 @@ export async function runMigrations(
   for (;;) {
     if (Date.now() > deadline) {
       throw new MigrationTimeout(
-        `Migrations are still running after ${Math.round(timeoutMs! / 1000)}s. They keep going on the deployment; run the release again to wait for them and finish it.`,
+        `Migrations are still running after ${Math.round(timeoutMs! / 1000)}s. They keep going on the deployment; deploy again to wait for them and finish.`,
       );
     }
     const status = runFunction<ReleaseStatus>(project, STATUS, runArgs);

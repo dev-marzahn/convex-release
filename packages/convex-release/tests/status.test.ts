@@ -20,6 +20,11 @@ test('joins local migrations with what the deployment recorded', () => {
   ]);
 });
 
+test('keeps the recorded state of a migration the checkout no longer has', () => {
+  const rows = migrationRows([b], [{ name: a, isDone: false, state: 'failed', processed: 40, error: 'boom' }]);
+  expect(rows).toContainEqual({ name: a, state: 'failed', processed: 40, error: 'boom', unknown: true });
+});
+
 test('reports failures with their error', () => {
   const [row] = migrationRows([a], [{ name: a, isDone: false, state: 'failed', processed: 100, error: 'boom\n  at x' }]);
   expect(row).toEqual({ name: a, state: 'failed', processed: 100, error: 'boom\n  at x' });

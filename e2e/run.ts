@@ -275,7 +275,7 @@ const scenarios: Record<string, () => Promise<void>> = {
     // v3 has some of the migrations; v1 has none, so it never runs any.
     for (const version of ['v3', 'v1']) {
       const older = await runCombined(version, 'data');
-      const refusal = older.log.find((l) => l.includes('newer release'));
+      const refusal = older.log.find((l) => l.includes('newer version'));
       expect(!older.healthy && older.exitCode === 1, `${version} on v4 data should refuse, got exit ${older.exitCode}`);
       expect(Boolean(refusal?.includes('nothing was pushed')) && !older.log.some((l) => l.endsWith(': pushed')), `${version} pushed before refusing`);
       log(`  ${version} on v4 data: refused before pushing`);
@@ -322,6 +322,33 @@ const scenarios: Record<string, () => Promise<void>> = {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  },
+
+  /** `test-upgrade --seed <fn> --check <fn>` with internal functions, which only the admin key can call. */
+  async internal() {
+    const upgrade = (check: string) =>
+      spawnSync(
+        'node',
+        [
+          join(ROOT, 'packages/convex-release/dist/cli.mjs'),
+          'test-upgrade',
+          '--from',
+          `${PREFIX}-app:v3`,
+          '--to',
+          `${PREFIX}-app:v4`,
+          '--seed',
+          'messages:seedInternal {"count": 50}',
+          '--check',
+          check,
+        ],
+        { cwd: join(ROOT, 'e2e/apps/v4'), env: { ...process.env, CI: '1' }, encoding: 'utf8' },
+      );
+    const passing = upgrade('messages:verifyInternal {"count": 50, "users": 10}');
+    expect(passing.status === 0, `test-upgrade with internal functions failed:\n${passing.stdout}${passing.stderr}`);
+    // A check that throws has to fail the test, or the passing run proves nothing.
+    const failing = upgrade('messages:verifyInternal {"count": 51, "users": 10}');
+    expect(failing.status !== 0 && `${failing.stdout}${failing.stderr}`.includes('expected 51 migrated messages'), 'a throwing --check passed');
+    log('  internal --seed and --check run; a throwing --check fails the test');
   },
 
   /** What a preview environment uses: seeds on an empty volume, a reset on downgrade, a snapshot on first start. */

@@ -55,7 +55,7 @@ export function deployWorkflow(ctx: Context): string {
 #
 # Pull requests: \`verify\` compares the migrations with the target branch. It
 # needs no deployment or secrets, so it runs on pull requests from forks too.
-# Pushes to ${ctx.branch}: \`deploy\` releases the code and runs pending migrations.
+# Pushes to ${ctx.branch}: \`deploy\` pushes the code and runs pending migrations.
 #
 # Secrets: CONVEX_DEPLOY_KEY for Convex Cloud (Dashboard > Settings > Deploy
 # keys). For a self-hosted backend, set CONVEX_SELF_HOSTED_URL and
@@ -111,7 +111,7 @@ export function imageWorkflow(ctx: Context): string {
 # ghcr.io/<owner>/<repo>:1.4.0 and :latest. Before pushing, it upgrades the
 # previous tag's image to this one in throwaway containers; a failed upgrade
 # stops the release.
-name: Release image
+name: Image
 
 on:
   push:
@@ -166,7 +166,7 @@ export function writeWorkflows(project: Project, pm: PackageManager, withImage: 
   const dir = join(repoRoot, '.github/workflows');
   mkdirSync(dir, { recursive: true });
   const files: Record<string, string> = { 'convex.yml': deployWorkflow(ctx) };
-  if (withImage) files['release-image.yml'] = imageWorkflow(ctx);
+  if (withImage) files['image.yml'] = imageWorkflow(ctx);
   const written: string[] = [];
   for (const [name, content] of Object.entries(files)) {
     const path = join(dir, name);

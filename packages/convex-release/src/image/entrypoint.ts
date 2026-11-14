@@ -165,9 +165,13 @@ async function checkDowngrade(url: string, key: string, after: 'start' | 'snapsh
     .join(', ');
   if (!newer) return;
   if (after === 'snapshot') {
-    throw new Error(`CONVEX_RELEASE_SNAPSHOT comes from a newer release (migrations not in this one: ${newer}). Export it from this release or an older one.`);
+    throw new Error(
+      `CONVEX_RELEASE_SNAPSHOT comes from a newer version of the app (migrations not in this one: ${newer}). Export it from this version or an older one.`,
+    );
   }
-  throw new Error(`the data was upgraded by a newer release (migrations not in this one: ${newer}). Run that release or a newer one; nothing was pushed.`);
+  throw new Error(
+    `the data was upgraded by a newer version of the app (migrations not in this one: ${newer}). Run that version or a newer one; nothing was pushed.`,
+  );
 }
 
 /** True when no table in the app (outside components) has a document. */
@@ -285,9 +289,9 @@ async function oneShot(url: string) {
   const key =
     process.env.CONVEX_ADMIN_KEY ?? (name && secret ? lastLine(execFileSync('/convex/generate_key', [name, secret], { encoding: 'utf8' })) : undefined);
   if (!key) throw new Error("Set INSTANCE_NAME and INSTANCE_SECRET (the backend's), or CONVEX_ADMIN_KEY.");
-  log(`releasing to ${url}`);
+  log(`deploying to ${url}`);
   await apply(url.replace(/\/+$/, ''), key);
-  log('released');
+  log('deployed');
 }
 
 function combined() {
@@ -307,7 +311,7 @@ function combined() {
     })
     .catch((err: unknown) => {
       failed = true;
-      log(`release failed: ${err instanceof Error ? err.message : String(err)}`);
+      log(`deploy failed: ${err instanceof Error ? err.message : String(err)}`);
       backend.kill('SIGINT');
       setTimeout(() => process.exit(1), 10_000).unref();
     });
@@ -315,7 +319,7 @@ function combined() {
 
 if (process.env.CONVEX_URL) {
   oneShot(process.env.CONVEX_URL).catch((err: unknown) => {
-    log(`release failed: ${err instanceof Error ? err.message : String(err)}`);
+    log(`deploy failed: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   });
 } else {

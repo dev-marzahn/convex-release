@@ -29,8 +29,8 @@ const seconds = (value: string | undefined) => (value === undefined ? undefined 
 
 program
   .command('dev')
-  .description('Release to your dev deployment (code, then pending migrations), then keep watching like `convex dev`.')
-  .option('--once', 'release once and exit instead of watching')
+  .description('Deploy to your dev deployment (code, then pending migrations), then keep watching like `convex dev`.')
+  .option('--once', 'deploy once and exit instead of watching')
   .option('--timeout <seconds>', 'stop waiting for migrations after this long')
   .allowUnknownOption()
   .argument('[convexDevArgs...]', 'passed on to `convex dev`')
@@ -48,7 +48,7 @@ program
 
 program
   .command('deploy')
-  .description('Release to the deployment `convex deploy` targets: prod, a deploy key, or a self-hosted URL.')
+  .description('Deploy code and pending migrations to the deployment `convex deploy` targets: prod, a deploy key, or a self-hosted URL.')
   .option('--deployment <name>', 'a specific deployment, as `convex deploy` takes it')
   .option('--timeout <seconds>', 'stop waiting for migrations after this long; they keep running on the deployment')
   .action(async (options: { deployment?: string; timeout?: string }) => {
@@ -58,7 +58,7 @@ program
 
 program
   .command('init')
-  .description('Set up migrations (and optionally a release image) in this Convex project.')
+  .description('Set up migrations (and optionally a Docker image) in this Convex project.')
   .option('--docker', 'also write Dockerfile, .dockerignore and compose.yaml')
   .option('--no-docker', "don't ask about Docker files")
   .option('--no-install', "don't install missing packages")
@@ -94,7 +94,7 @@ program
 
     let docker = options.docker;
     if (docker === undefined && interactive) {
-      const answer = await p.confirm({ message: 'Also set up a Docker release image (Dockerfile, compose.yaml)?', initialValue: true });
+      const answer = await p.confirm({ message: 'Also set up a Docker image (Dockerfile, compose.yaml)?', initialValue: true });
       docker = !p.isCancel(answer) && answer;
     }
     if (docker) {
@@ -140,7 +140,8 @@ program
     const icon: Record<string, string> = { done: '✔', running: '…', pending: '○', failed: '✖', canceled: '✖' };
     const width = Math.max(...rows.map((r) => label(r.name).length));
     const lines = rows.map((r) => {
-      const detail = r.unknown ? '  not in this checkout: from a newer release' : r.error ? `  ${r.error.split('\n')[0]}` : '';
+      const unknown = r.state === 'done' ? '  not in this checkout: from a newer version' : '  not in this checkout: renamed or deleted';
+      const detail = r.unknown ? unknown : r.error ? `  ${r.error.split('\n')[0]}` : '';
       return `${icon[r.state]} ${label(r.name).padEnd(width)}  ${r.state.padEnd(8)} ${String(r.processed).padStart(7)} docs${detail}`;
     });
     p.note(lines.join('\n'), 'Migrations');
@@ -166,7 +167,7 @@ program
     }
     if (result.matches) {
       ui?.done('The schema accepts the data as it is.');
-      if (result.pending.length > 0) p.log.info(`Pending migrations still run on release: ${result.pending.map(label).join(', ')}`);
+      if (result.pending.length > 0) p.log.info(`Pending migrations still run on deploy:${result.pending.map(label).join(', ')}`);
       return;
     }
     const where = result.mismatch?.table ? `\`${result.mismatch.table}\`` : 'a table';
@@ -175,7 +176,7 @@ program
       p.log.warn(`No migration is pending. Write one: convex-release new "what it changes" --table ${result.mismatch?.table ?? '<table>'}`);
       process.exit(1);
     }
-    p.log.warn(`Pending migrations run before the strict push: ${result.pending.map(label).join(', ')}. If they change ${where}, the release will pass.`);
+    p.log.warn(`Pending migrations run before the strict push: ${result.pending.map(label).join(', ')}. If they change ${where}, the deploy will pass.`);
   });
 
 program
@@ -242,7 +243,7 @@ program
 
 program
   .command('codegen')
-  .description('Regenerate migrations/_generated.ts from the numbered migration files.')
+  .description('Regenerate migrations/_generated.ts and seeds/_generated.ts from the migration and seed files.')
   .action(() => {
     const project = findProject();
     const { changed, migrations } = writeGenerated(project);
@@ -252,7 +253,7 @@ program
 
 program
   .command('bundle')
-  .description('Write the push requests a release image applies (run by the image build).')
+  .description('Write the push requests an image applies (run by the image build).')
   .argument('[outDir]', 'where to write push.json and push.relaxed.json', '.convex-release')
   .action((outDir: string) => {
     const project = findProject();
@@ -264,9 +265,9 @@ program
 
 program
   .command('build')
-  .description('Build the release image, tagged <name>:<version> from package.json (<name>-oneshot:<version> with --oneshot).')
+  .description('Build the image, tagged <name>:<version> from package.json (<name>-oneshot:<version> with --oneshot).')
   .option('-t, --tag <tag>', 'the image tag (default from package.json)')
-  .option('--oneshot', 'build the one-shot image (releases to a separate backend) instead')
+  .option('--oneshot', 'build the one-shot image (deploys to a separate backend) instead')
   .action((options: { tag?: string; oneshot?: boolean }) => {
     const project = findProject();
     const tag = options.tag ?? appImageName(project, options.oneshot ? '-oneshot' : '');
@@ -277,13 +278,13 @@ program
 
 program
   .command('test-upgrade')
-  .description('Check that the new release upgrades data from a previous one: starts --from, then --to on the same volume.')
-  .requiredOption('--from <image>', 'the release users run today, e.g. my-app:1.3.0')
-  .option('--to <image>', 'the new release (default: build this project first)')
+  .description('Check that the new version upgrades data from a previous one: starts --from, then --to on the same volume.')
+  .requiredOption('--from <image>', 'the version users run today, e.g. my-app:1.3.0')
+  .option('--to <image>', 'the new version (default: build this project first)')
   .option('--seed [function]', 'create data on --from: its own seeds, or a function such as testing:seed')
   .option('--check <function>', 'a function to run on --to afterwards; it should throw if the data is wrong')
   .option('--snapshot <zip>', 'a `convex export` zip to import into --from first: a rehearsal on a copy of real data')
-  .option('--timeout <seconds>', 'how long each release may take to become ready', '600')
+  .option('--timeout <seconds>', 'how long each version may take to become ready', '600')
   .action(async (options: { from: string; to?: string; seed?: string | true; check?: string; snapshot?: string; timeout: string }) => {
     const project = findProject();
     const seed = options.seed === true ? `${SEED} {"force": true}` : options.seed;
@@ -334,17 +335,17 @@ async function runRelease(project: Project, target: ReleaseTarget, timeoutMs?: n
     result = await release(project, target, { step: ui.step, progress: (s) => ui.update(`Running migrations: ${s.message ?? s.state}`) }, { timeoutMs });
   } catch (err) {
     ui.fail();
-    summarize(project, target, err instanceof MigrationTimeout ? 'Release still running: migrations continue on the deployment' : 'Release failed');
+    summarize(project, target, err instanceof MigrationTimeout ? 'Deploy still running: migrations continue on the deployment' : 'Deploy failed');
     throw err;
   }
   if (result.state !== 'done') {
     ui.fail(result.message ?? 'Migrations failed');
-    summarize(project, target, 'Release failed');
+    summarize(project, target, 'Deploy failed');
     process.exit(1);
   }
   ui.done();
-  summarize(project, target, 'Released');
-  p.log.success('Released: code deployed, data matches the schema.');
+  summarize(project, target, 'Deployed');
+  p.log.success('Deployed: code live, data matches the schema.');
 }
 
 /** The migrations table for the GitHub Actions job summary. Best effort. */

@@ -143,7 +143,7 @@ export function createRelease<DataModel extends GenericDataModel>(component: Mig
             if (unknown.length > 0) {
               return {
                 state: 'failed',
-                message: `the data was upgraded by a newer release (migrations not in this one: ${unknown.join(', ')}). ` + `Run that release or a newer one.`,
+                message: `the data was upgraded by a newer version of the app (migrations not in this one: ${unknown.join(', ')}). Deploy that version or a newer one.`,
               };
             }
           }

@@ -1,6 +1,6 @@
 import { v } from 'convex/values';
 
-import { mutation, query } from './_generated/server';
+import { internalQuery, mutation, query } from './_generated/server';
 import { userByName } from './users';
 
 export const send = mutation({
@@ -30,4 +30,17 @@ export const checkPage = query({
 export const userCount = query({
   args: {},
   handler: async (ctx) => (await ctx.db.query('users').collect()).length,
+});
+
+/** Test helper for `test-upgrade --check`: throws unless `count` messages and `users` users were migrated. */
+export const verifyInternal = internalQuery({
+  args: { count: v.number(), users: v.number() },
+  handler: async (ctx, { count, users }) => {
+    const messages = await ctx.db.query('messages').collect();
+    const migrated = messages.filter((m) => m.length === m.text.length && (m as unknown as Record<string, unknown>).author === undefined);
+    const userTotal = (await ctx.db.query('users').collect()).length;
+    if (migrated.length !== count || userTotal !== users) {
+      throw new Error(`expected ${count} migrated messages and ${users} users, got ${migrated.length} and ${userTotal}`);
+    }
+  },
 });

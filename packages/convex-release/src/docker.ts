@@ -43,15 +43,15 @@ export function build(project: Project, options: BuildOptions): void {
 }
 
 export interface UpgradeTestOptions {
-  /** The release users run today, e.g. `my-app:1.3.0`. */
+  /** The version users run today, e.g. `my-app:1.3.0`. */
   from: string;
-  /** The new release, e.g. `my-app:1.4.0`. */
+  /** The new version, e.g. `my-app:1.4.0`. */
   to: string;
   /** A function to call on `from` to create data, e.g. `testing:seed`. */
   seed?: string;
   /** A function to call on `to` afterwards; it should throw if the data is wrong. */
   check?: string;
-  /** How long each release may take to become ready. */
+  /** How long each version may take to become ready. */
   timeoutMs?: number;
   /**
    * A `convex export` zip to import into `from` before upgrading: a rehearsal
@@ -71,7 +71,7 @@ export interface UpgradeTestEvents {
 export interface UpgradeTestResult {
   /** How long `to` took from start to ready, migrations included. */
   upgradeMs: number;
-  /** The release's own log lines from `to`. */
+  /** The image's own `[convex-release]` log lines from `to`. */
   log: string[];
 }
 

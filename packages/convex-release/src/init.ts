@@ -65,7 +65,7 @@ export function dockerFiles(project: Project): Record<string, string> {
     .replace(/[^a-z0-9-]+/gi, '-')
     .toLowerCase();
   return {
-    Dockerfile: `# Builds this app's release image: the Convex backend plus this app's
+    Dockerfile: `# Builds this app's image: the Convex backend plus this app's
 # functions and migrations, applied when the container starts.
 FROM ${IMAGE}
 `,
@@ -73,7 +73,7 @@ FROM ${IMAGE}
 .git
 .env*
 `,
-    'compose.yaml': `# Run the release image. Upgrading means changing the tag and running
+    'compose.yaml': `# Runs this app's image. Upgrading means changing the tag and running
 # \`docker compose up -d\`: migrations run before it reports healthy.
 services:
   ${slug}:

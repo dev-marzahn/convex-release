@@ -10,7 +10,7 @@ export interface MigrationRow {
   state: MigrationState;
   processed: number;
   error?: string;
-  /** Recorded on the deployment but not in this checkout: from a newer release. */
+  /** Recorded on the deployment but not in this checkout: from a newer version if done, else renamed or deleted. */
   unknown?: boolean;
 }
 
@@ -30,25 +30,26 @@ export function functionName(module: string): string {
   return `migrations/${module}`;
 }
 
+function rowState(s: ComponentStatus): MigrationState {
+  if (s.isDone) return 'done';
+  if (s.state === 'failed') return 'failed';
+  if (s.state === 'canceled') return 'canceled';
+  return s.state === 'inProgress' ? 'running' : 'pending';
+}
+
+function row(s: ComponentStatus): MigrationRow {
+  return { name: s.name, state: rowState(s), processed: s.processed, ...(s.error ? { error: s.error } : {}) };
+}
+
 export function migrationRows(local: string[], recorded: ComponentStatus[]): MigrationRow[] {
   const byName = new Map(recorded.map((s) => [s.name, s]));
   const rows: MigrationRow[] = local.map((name) => {
     const s = byName.get(name);
-    if (!s) return { name, state: 'pending', processed: 0 };
-    const state: MigrationState = s.isDone
-      ? 'done'
-      : s.state === 'failed'
-        ? 'failed'
-        : s.state === 'canceled'
-          ? 'canceled'
-          : s.state === 'inProgress'
-            ? 'running'
-            : 'pending';
-    return { name, state, processed: s.processed, ...(s.error ? { error: s.error } : {}) };
+    return s ? row(s) : { name, state: 'pending', processed: 0 };
   });
   const known = new Set(local);
   for (const s of recorded) {
-    if (!known.has(s.name)) rows.push({ name: s.name, state: s.isDone ? 'done' : 'pending', processed: s.processed, unknown: true });
+    if (!known.has(s.name)) rows.push({ ...row(s), unknown: true });
   }
   return rows;
 }

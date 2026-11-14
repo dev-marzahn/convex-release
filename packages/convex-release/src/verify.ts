@@ -101,7 +101,7 @@ export function compareMigrations(shipped: Shipped[], current: { number: number;
       migration: old.module,
       message: renumbered
         ? `was renumbered to ${renumbered.module}. Deployments that ran ${old.module} would run it again under the new name; keep the old number.`
-        : "was removed or renamed. Deployments on releases before it can't upgrade without it; restore it.",
+        : "was removed or renamed. Deployments on versions before it can't upgrade without it; restore it.",
     });
   }
   const highestShipped = Math.max(0, ...shipped.map((m) => m.number));
