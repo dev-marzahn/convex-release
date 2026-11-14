@@ -22,7 +22,7 @@ export default defineMigration({
 ```
 
 ```sh
-npx convex-release deploy
+npx @dev-marzahn/convex-release deploy
 ```
 
 The images do the same when a self-hosted container starts, so someone who runs your app upgrades it by changing the image tag.

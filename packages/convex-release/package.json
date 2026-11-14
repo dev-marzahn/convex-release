@@ -63,5 +63,8 @@
   "peerDependencies": {
     "@convex-dev/migrations": "^0.3.8",
     "convex": "^1.50.0"
+  },
+  "engines": {
+    "node": ">=22.18.0"
   }
 }

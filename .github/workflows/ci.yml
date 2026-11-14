@@ -6,9 +6,16 @@ on:
   pull_request:
   # The release workflow runs these checks before it publishes.
   workflow_call:
+    inputs:
+      ref:
+        description: The ref to check out, when it isn't the one that triggered the run.
+        type: string
+        default: ''
 
+# In a called run, github.workflow is the caller's name, so a release never
+# cancels push CI or the other way around.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -21,6 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.ref }}
           # verify compares the example's migrations with the base branch.
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
@@ -43,6 +51,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4

@@ -9,8 +9,8 @@ name: Release
 on:
   push:
     tags: ['v*']
-  # Re-runs a release from the selected branch, for when a tag's run failed for
-  # reasons outside the package. The version check still applies.
+  # Re-runs a tag's release with this branch's workflow, for when the tag's own
+  # run failed in the workflow itself. Every job still builds the tag's code.
   workflow_dispatch:
     inputs:
       tag:
@@ -32,6 +32,8 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - id: version
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
@@ -46,6 +48,8 @@ jobs:
   ci:
     needs: version
     uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
 
   images:
     name: Images
@@ -56,6 +60,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -102,6 +108,8 @@ jobs:
       id-token: write # provenance
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
