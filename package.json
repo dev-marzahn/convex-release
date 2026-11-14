@@ -1,0 +1,43 @@
+{
+  "name": "convex-release-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "ready": "vp run -r build && vp check && vp run -r test",
+    "build": "vp run -r build",
+    "test": "vp run -r test"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "overrides": {
+    "vite": "catalog:"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "bun",
+      "version": "1.4.4",
+      "onFail": "download"
+    }
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "catalog": {
+    "@clack/prompts": "^1.9.0",
+    "@convex-dev/migrations": "^0.3.8",
+    "@types/node": "^26.6.6",
+    "commander": "^15.1.0",
+    "convex": "^1.50.0",
+    "typescript": "^7.0.2",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.6.0",
+    "vite-plus": "1.6.0"
+  }
+}

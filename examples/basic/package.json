@@ -1,0 +1,10 @@
+{
+  "name": "example-basic",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@convex-dev/migrations": "catalog:",
+    "@dev-marzahn/convex-release": "workspace:*",
+    "convex": "catalog:"
+  }
+}
