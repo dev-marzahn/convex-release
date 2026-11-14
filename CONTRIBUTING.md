@@ -48,4 +48,5 @@ Maintainers release from `main`:
 
 1. Pick the version by [Epoch SemVer](https://antfu.me/posts/epoch-semver): `{EPOCH * 100 + MAJOR}.MINOR.PATCH`, starting at `100.0.0`. Bump the first number by one for a breaking change, and to the next hundred for a new epoch.
 2. Set `version` in `packages/convex-release/package.json` and the image tags in README.md, and move the "Unreleased" changelog entries under the new version.
-3. Push a tag `v<version>`. The [release workflow](.github/workflows/release.yml) checks that the tag matches the package version, runs the checks, pushes the four images to ghcr.io for amd64 and arm64, then publishes the package to npm.
+3. Push a tag `v<version>`. The [release workflow](.github/workflows/release.yml) checks that the tag matches the package version, runs the checks, pushes the four images to ghcr.io for amd64 and arm64, then stages the package on npm.
+4. Approve the staged version with 2FA under **Staged Packages** on npmjs.com, or with `npm stage approve <id>`. It goes live on approval.

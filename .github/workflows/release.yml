@@ -7,7 +7,8 @@
 # runs from v* tags and main. Only people with write access can push a tag or
 # start a run by hand. npm publishes through trusted publishing (OIDC): the
 # package's npm settings name this workflow and that environment, so no token
-# is stored anywhere.
+# is stored anywhere. The workflow only stages the version: it goes live when a
+# maintainer approves it with 2FA.
 name: Release
 
 on:
@@ -135,4 +136,6 @@ jobs:
         working-directory: ${{ runner.temp }}
         env:
           PROVENANCE: ${{ github.event.repository.private && '--no-provenance' || '--provenance' }}
-        run: npm publish ./*.tgz "$PROVENANCE" --access public
+        # Stages the version; it goes live once a maintainer approves it with 2FA
+        # under Staged Packages on npmjs.com, or with `npm stage approve <id>`.
+        run: npm stage publish ./*.tgz "$PROVENANCE" --access public
