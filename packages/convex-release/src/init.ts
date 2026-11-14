@@ -3,10 +3,9 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import pkg from '../package.json' with { type: 'json' };
+import { IMAGE } from './images.ts';
 import type { Project } from './project.ts';
 
-export const IMAGE = `ghcr.io/dev-marzahn/convex-release:${pkg.version}`;
 const PACKAGES = ['@dev-marzahn/convex-release', '@convex-dev/migrations'];
 
 export type PackageManager = 'bun' | 'pnpm' | 'yarn' | 'npm';

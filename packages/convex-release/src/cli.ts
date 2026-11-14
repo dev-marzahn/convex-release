@@ -9,6 +9,8 @@ import pkg from '../package.json' with { type: 'json' };
 import { bundle } from './bundle.ts';
 import { writeGenerated } from './codegen.ts';
 import { runInteractive } from './convex-cli.ts';
+import { build, testUpgrade } from './docker.ts';
+import { appImageName } from './images.ts';
 import { detectPackageManager, ensureConvexConfig, installPackages, missingPackages, writeDockerFiles } from './init.ts';
 import { createMigration } from './new.ts';
 import { findProject, type Project } from './project.ts';
@@ -145,6 +147,57 @@ program
     p.log.success(
       `Bundled ${result.modules} modules${result.relaxed ? ` and ${result.migrations} migration${result.migrations === 1 ? '' : 's'} (two passes)` : ' (no migrations: one pass)'}`,
     );
+  });
+
+program
+  .command('build')
+  .description('Build the release image, tagged <package name>:<package version>.')
+  .option('-t, --tag <tag>', 'the image tag (default from package.json)')
+  .option('--oneshot', 'build the one-shot image (releases to a separate backend) instead')
+  .action((options: { tag?: string; oneshot?: boolean }) => {
+    const project = findProject();
+    const tag = options.tag ?? appImageName(project, options.oneshot ? '-release' : '');
+    p.log.step(`Building ${tag}`);
+    build(project, { tag, oneshot: options.oneshot });
+    p.log.success(`Built ${tag}`);
+  });
+
+program
+  .command('test-upgrade')
+  .description('Check that the new release upgrades data from a previous one: starts --from, then --to on the same volume.')
+  .requiredOption('--from <image>', 'the release users run today, e.g. my-app:1.3.0')
+  .option('--to <image>', 'the new release (default: build this project first)')
+  .option('--seed <function>', 'a function to run on --from to create data, e.g. testing:seed')
+  .option('--check <function>', 'a function to run on --to afterwards; it should throw if the data is wrong')
+  .option('--timeout <seconds>', 'how long each release may take to become ready', '600')
+  .action(async (options: { from: string; to?: string; seed?: string; check?: string; timeout: string }) => {
+    const project = findProject();
+    let to = options.to;
+    if (!to) {
+      to = appImageName(project);
+      p.log.step(`Building ${to}`);
+      build(project, { tag: to });
+    }
+    const spinner = p.spinner();
+    let current: string | undefined;
+    try {
+      await testUpgrade(
+        { from: options.from, to, seed: options.seed, check: options.check, timeoutMs: Number(options.timeout) * 1000 },
+        {
+          step: (message) => {
+            if (current) spinner.stop(current);
+            spinner.start(message);
+            current = message;
+          },
+          log: (line) => spinner.message(`${current}: ${line}`),
+        },
+      );
+    } catch (err) {
+      spinner.error(current ?? 'Failed');
+      throw err;
+    }
+    spinner.stop(current);
+    p.log.success(`${options.from} upgrades to ${to}`);
   });
 
 async function runRelease(project: Project, target: ReleaseTarget) {

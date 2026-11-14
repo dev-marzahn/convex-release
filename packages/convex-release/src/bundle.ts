@@ -14,6 +14,7 @@ import { writeGenerated } from './codegen.ts';
 import { convexBin } from './convex-cli.ts';
 import type { Project } from './project.ts';
 import { copyProject } from './relaxed.ts';
+import { functionName } from './status.ts';
 
 export interface BundleResult {
   modules: number;
@@ -21,9 +22,17 @@ export interface BundleResult {
   relaxed: boolean;
 }
 
+/** `release.json`: what the entrypoint checks before it pushes anything. */
+export interface ReleaseManifest {
+  /** Every migration this release knows, oldest first, as the component names them. */
+  migrations: string[];
+}
+
 export function bundle(project: Project, outDir: string): BundleResult {
   const { migrations } = writeGenerated(project);
   mkdirSync(outDir, { recursive: true });
+  const manifest: ReleaseManifest = { migrations: migrations.map((m) => functionName(m.module)) };
+  writeFileSync(join(outDir, 'release.json'), JSON.stringify(manifest));
   // Both requests come from one copy: esbuild names shared chunks by path, so
   // two directories would give the same code different chunk names.
   const copy = copyProject(project);

@@ -17,6 +17,8 @@ const SECRET = '4361726e697461732c206c69746572616c6c79206d65616e696e6720226c6974
 const PREFIX = 'convex-release-e2e';
 const PORT = 37300;
 const URL = `http://127.0.0.1:${PORT}`;
+/** The backend the images pin, for the stock backend in the one-shot scenario. */
+const BACKEND_IMAGE = /^ARG BACKEND_IMAGE=(\S+)$/m.exec(readFileSync(join(ROOT, 'images/Dockerfile'), 'utf8'))![1]!;
 
 function sh(cmd: string, args: string[], options: SpawnSyncOptions = {}): string {
   const result = spawnSync(cmd, args, { encoding: 'utf8', ...options });
@@ -266,9 +268,14 @@ const scenarios: Record<string, () => Promise<void>> = {
 
   async downgrade() {
     await upgradePath(['v1', 'v4'], 100);
-    const older = await runCombined('v3', 'data');
-    expect(!older.healthy && older.exitCode === 1, `v3 on v4 data should refuse, got exit ${older.exitCode}`);
-    log(`  v3 on v4 data: refused (${older.log.find((l) => l.includes('newer release'))?.slice(0, 120)}…)`);
+    // v3 has some of the migrations; v1 has none, so it never runs any.
+    for (const version of ['v3', 'v1']) {
+      const older = await runCombined(version, 'data');
+      const refusal = older.log.find((l) => l.includes('newer release'));
+      expect(!older.healthy && older.exitCode === 1, `${version} on v4 data should refuse, got exit ${older.exitCode}`);
+      expect(Boolean(refusal?.includes('nothing was pushed')) && !older.log.some((l) => l.endsWith(': pushed')), `${version} pushed before refusing`);
+      log(`  ${version} on v4 data: refused before pushing`);
+    }
     const back = await runCombined('v4', 'data');
     expect(back.healthy, 'rolling forward to v4 failed');
     expect((await check()).wellFormed === 200, 'data changed by the refused downgrade');
@@ -299,7 +306,7 @@ const scenarios: Record<string, () => Promise<void>> = {
       `INSTANCE_SECRET=${SECRET}`,
       '-v',
       `${PREFIX}-data:/convex/data`,
-      'ghcr.io/convex/convex-backend:latest',
+      BACKEND_IMAGE,
     );
     while (
       !(await fetch(`${URL}/version`).then(

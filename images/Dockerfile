@@ -13,8 +13,10 @@
 #                     backend (CONVEX_URL) and exits.
 #   oneshot-runtime   The same without the build step.
 #
-# Pin BACKEND_IMAGE in releases: the push format follows the backend version.
-ARG BACKEND_IMAGE=ghcr.io/convex/convex-backend:latest
+# The backend is pinned: the push format follows its version, so each
+# convex-release release is tested against exactly one backend build. Convex
+# tags backend images by commit; bump this, run `bun run e2e`, release.
+ARG BACKEND_IMAGE=ghcr.io/convex/convex-backend:d1fcbeaf939502a23a0f4b7e9095a12e84866294
 ARG NODE_IMAGE=node:24-trixie-slim
 
 FROM ${BACKEND_IMAGE} AS backend

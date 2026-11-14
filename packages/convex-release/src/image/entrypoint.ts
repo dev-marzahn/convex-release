@@ -22,6 +22,7 @@ const START = 'migrations/_generated:start';
 const STATUS = 'migrations/_generated:status';
 const PUSH_FILE = process.env.CONVEX_RELEASE_PUSH ?? '/convex/app/push.json';
 const RELAXED_FILE = PUSH_FILE.replace(/\.json$/, '.relaxed.json');
+const MANIFEST_FILE = PUSH_FILE.replace(/[^/]+$/, 'release.json');
 const READY_FILE = process.env.CONVEX_RELEASE_READY_FILE ?? '/tmp/convex-ready';
 const POLL_MS = 1000;
 /** A read right after `start` can still show the previous run's failure. */
@@ -95,8 +96,42 @@ async function runMigrations(url: string, key: string) {
   }
 }
 
+/** The migrations the deployment has recorded, straight from the component. */
+async function recordedMigrations(url: string, key: string): Promise<{ name: string; isDone: boolean }[]> {
+  try {
+    const r = await post<{ status: string; value: { name: string; isDone: boolean }[] }>(
+      url,
+      '/api/function',
+      { componentPath: 'migrations', path: 'lib:getStatus', format: 'json', args: { limit: 1000 } },
+      key,
+    );
+    return r.status === 'success' ? r.value : [];
+  } catch {
+    // No migrations component yet (the backend answers 500): a fresh
+    // deployment, or one never released with convex-release. A real outage
+    // fails the push that follows, and `status` checks again after pass 1.
+    return [];
+  }
+}
+
+/**
+ * Refuses an older release before anything is pushed: if the data has
+ * finished migrations this release doesn't know, a newer one shipped them.
+ */
+async function assertNotDowngrade(url: string, key: string) {
+  if (!existsSync(MANIFEST_FILE)) return;
+  const known = new Set((JSON.parse(readFileSync(MANIFEST_FILE, 'utf8')) as { migrations: string[] }).migrations);
+  const newer = (await recordedMigrations(url, key)).filter((s) => s.isDone && !known.has(s.name)).map((s) => s.name);
+  if (newer.length > 0) {
+    throw new Error(
+      `the data was upgraded by a newer release (migrations not in this one: ${newer.join(', ')}). Run that release or a newer one; nothing was pushed.`,
+    );
+  }
+}
+
 async function apply(url: string, key: string) {
   await waitForBackend(url);
+  await assertNotDowngrade(url, key);
   const request = JSON.parse(readFileSync(PUSH_FILE, 'utf8')) as object;
   if (existsSync(RELAXED_FILE)) {
     await push(url, key, JSON.parse(readFileSync(RELAXED_FILE, 'utf8')) as object, 'pass 1 (validation off)');

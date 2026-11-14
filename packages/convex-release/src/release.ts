@@ -14,6 +14,7 @@ import { push, runFunction, type PushTarget } from './convex-cli.ts';
 import type { ReleaseStatus } from './index.ts';
 import type { Project } from './project.ts';
 import { copyProject } from './relaxed.ts';
+import { readStatus, type MigrationRow } from './status.ts';
 
 export const START = 'migrations/_generated:start';
 export const STATUS = 'migrations/_generated:status';
@@ -57,6 +58,26 @@ function assertConfigured(project: Project) {
   throw new Error('No Convex deployment is configured here. Run `npx convex dev` once to set one up, or set CONVEX_DEPLOY_KEY.');
 }
 
+/**
+ * Refuses before anything is pushed when the deployment has finished
+ * migrations this checkout doesn't have: a newer release shipped them.
+ */
+function assertNotDowngrade(project: Project, runArgs: string[]) {
+  let rows: MigrationRow[];
+  try {
+    rows = readStatus(project, runArgs);
+  } catch {
+    // No migrations component deployed yet: nothing can be newer.
+    return;
+  }
+  const newer = rows.filter((r) => r.unknown && r.state === 'done').map((r) => r.name);
+  if (newer.length > 0) {
+    throw new Error(
+      `The deployment has migrations this checkout doesn't (${newer.join(', ')}): a newer release ran them. Update your checkout; nothing was pushed.`,
+    );
+  }
+}
+
 function readEnvFile(project: Project, name: string): Record<string, string> {
   const path = join(project.root, name);
   if (!existsSync(path)) return {};
@@ -76,6 +97,7 @@ export interface ReleaseEvents {
 export async function release(project: Project, target: ReleaseTarget, events: ReleaseEvents, pollMs = 1000): Promise<ReleaseStatus> {
   assertConfigured(project);
   writeGenerated(project);
+  assertNotDowngrade(project, target.runArgs);
 
   events.step('Pushing with schema validation off');
   const copy = copyProject(project);
