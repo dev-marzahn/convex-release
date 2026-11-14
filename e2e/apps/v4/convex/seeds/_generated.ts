@@ -6,11 +6,10 @@
  * @module
  */
 
-import { createSeeds } from '@dev-marzahn/convex-release/seed';
-
-import { internal } from '../_generated/api';
-import type { DataModel } from '../_generated/dataModel';
-import schema from '../schema';
+import { createSeeds } from "@dev-marzahn/convex-release/seed";
+import { internal } from "../_generated/api";
+import type { DataModel } from "../_generated/dataModel";
+import schema from "../schema";
 
 const seeds = createSeeds<DataModel>(schema);
 
@@ -27,4 +26,7 @@ const seeds = createSeeds<DataModel>(schema);
 export const defineSeed = seeds.defineSeed;
 
 /** Run by `convex-release seed`, `dev` and the release images, in this order. */
-export const run = seeds.runner([internal.seeds['01_users'].default, internal.seeds['02_messages'].default]);
+export const run = seeds.runner([
+  internal.seeds["01_users"].default,
+  internal.seeds["02_messages"].default,
+]);

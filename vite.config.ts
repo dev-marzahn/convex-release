@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite-plus';
 
 // Generated code keeps the style of whatever generates it.
-const generated = ['**/_generated/**', '**/migrations/_generated.ts'];
+const generated = ['**/_generated/**', '**/migrations/_generated.ts', '**/seeds/_generated.ts'];
 
 export default defineConfig({
   fmt: {
@@ -17,7 +17,6 @@ export default defineConfig({
     jsPlugins: [{ name: 'vite-plus', specifier: 'vite-plus/oxlint-plugin' }],
     rules: {
       'vite-plus/prefer-vite-plus-imports': 'error',
-      // Class members say `public`, `private` or `protected` explicitly.
       'typescript/explicit-member-accessibility': ['error', { accessibility: 'explicit' }],
     },
     options: { typeAware: true, typeCheck: true },

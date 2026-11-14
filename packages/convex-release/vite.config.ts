@@ -4,9 +4,6 @@ import { defineConfig } from 'vite-plus';
 export default defineConfig({
   pack: [
     {
-      // src/index.ts: the library apps import (via the generated migrations file).
-      // src/seed.ts: the seeding library (via the generated seeds file).
-      // src/cli.ts: the `convex-release` binary.
       entry: ['src/index.ts', 'src/seed.ts', 'src/cli.ts'],
       dts: { generator: 'tsgo' },
       exports: true,

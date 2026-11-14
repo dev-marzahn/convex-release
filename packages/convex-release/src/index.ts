@@ -106,12 +106,9 @@ export function createRelease<DataModel extends GenericDataModel>(component: Mig
       const start = internalMutationGeneric({
         args: {},
         handler: async (ctx) => {
-          // Not migrations.runSerially(): it skips the start when its stale-
-          // snapshot read sees a migration in progress, and right after a
-          // restart that snapshot can predate the batch that failed. Then
-          // nothing retries and `status` keeps reporting the old failure. This
-          // reads fresh and starts at the first unfinished migration, so a
-          // failed one retries its batch inside this transaction.
+          // Not migrations.runSerially(): after a restart its snapshot read can
+          // still show the failed migration in progress, and then it never
+          // retries it. This reads fresh and starts at the first unfinished one.
           if (list.length === 0) return null;
           const statuses = await migrations.getStatus(ctx, { migrations: list });
           if (statuses.some((s) => s.state === 'inProgress')) return null;

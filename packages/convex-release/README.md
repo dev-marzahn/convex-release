@@ -263,15 +263,7 @@ The reset covers a branch that renames or renumbers a migration after its previe
 
 The snapshot holds the data of wherever you exported it, and the preview runs the pull request's code on it. Export from a staging deployment or strip personal data first.
 
-### Coolify
-
-Coolify deploys each pull request of a Git-based app as a preview with its own URL, environment variables and volumes, and deletes it when the pull request closes. With the combined image's one-line `Dockerfile`:
-
-1. Turn on preview deployments for the app and set a URL template like `{{pr_id}}.api.example.com`, with a wildcard DNS record for it.
-2. Under the preview environment variables, set `INSTANCE_NAME`, an `INSTANCE_SECRET` that differs from production's, `CONVEX_RELEASE_SEED=true` and `CONVEX_RELEASE_ON_DOWNGRADE=reset`.
-3. Keep previews of pull requests from forks off: the preview runs the pull request's code on your server.
-
-Each push to the pull request rebuilds the image and starts it on the preview's volume, so a migration added later in the branch runs on the data the preview already has.
+On a platform with per-pull-request previews, such as Coolify, give the previews their own `INSTANCE_SECRET` and set `CONVEX_RELEASE_SEED=true` and `CONVEX_RELEASE_ON_DOWNGRADE=reset` as preview-only variables. When a push to the pull request starts the new image on the preview's volume, a migration added later in the branch runs on the data the preview already has.
 
 ## CI
 
@@ -308,14 +300,13 @@ npx convex export --prod --path prod.zip
 bunx convex-release test-upgrade --from ghcr.io/you/my-app:1.3.0 --snapshot prod.zip
 ```
 
-The export holds the migrations component's records too, so the rehearsal runs the migrations production hasn't run yet and skips the rest. The tests use self-hosted exports; Convex Cloud exports share the format but haven't been tried yet. The snapshot holds your production data: keep it out of public artifacts, and don't run the job on pull requests from forks.
+The export holds the migrations component's records too, so the rehearsal runs the migrations production hasn't run yet and skips the rest. The snapshot holds your production data: keep it out of public artifacts, and don't run the job on pull requests from forks.
 
 ## Limits
 
 - Bundling uses two hidden `convex deploy` flags (`--write-push-request`, `--push-all-modules`). Each convex-release release pins the backend image it tests against and supports `convex` 1.50 and later.
 - Between steps 2 and 4 your new code runs against data the migrations haven't reached yet, as with any online Convex migration. Write code that handles both shapes until the release finishes.
-- The Coolify steps follow Coolify's documentation; nobody has run them on a Coolify server yet.
-- The images are for self-hosted Convex. `dev` and `deploy` use the `convex` CLI, so they work wherever it does; the end-to-end tests cover self-hosted deployments.
+- The images are for self-hosted Convex. `dev` and `deploy` use the `convex` CLI, so they work wherever it does.
 
 ## License
 

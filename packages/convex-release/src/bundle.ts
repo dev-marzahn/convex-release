@@ -35,8 +35,6 @@ export function bundle(project: Project, outDir: string): BundleResult {
   mkdirSync(outDir, { recursive: true });
   const manifest: ReleaseManifest = { migrations: migrations.map((m) => functionName(m.module)), seeds: (seeds?.length ?? 0) > 0 };
   writeFileSync(join(outDir, 'release.json'), JSON.stringify(manifest));
-  // Both requests come from one copy: esbuild names shared chunks by path, so
-  // two directories would give the same code different chunk names.
   const copy = copyProject(project);
   try {
     // The copy is only bundled, never deployed: its deployment config would

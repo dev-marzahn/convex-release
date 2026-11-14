@@ -4,12 +4,12 @@ Data migrations and self-hosted Docker releases for Convex apps. The package's [
 
 ## Repository
 
-| Path                      | Contents                                                                                                         |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `packages/convex-release` | The npm package: the CLI, the library the generated migrations file imports, and the release images' entrypoint. |
-| `images/`                 | The Dockerfile for the release images and the build step they run in an app's build.                             |
-| `examples/basic`          | An app with three migrations.                                                                                    |
-| `e2e/`                    | Fixture apps v1 to v4 and the script that builds them from the images and upgrades them on real data.            |
+| Path                      | Contents                                                                                                                     |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `packages/convex-release` | The npm package: the CLI, the libraries the generated migrations and seeds files import, and the release images' entrypoint. |
+| `images/`                 | The Dockerfile for the release images and the build step they run in an app's build.                                         |
+| `examples/basic`          | An app with three migrations and two seeds.                                                                                  |
+| `e2e/`                    | Fixture apps v1 to v4 and the script that builds them from the images and upgrades them on real data.                        |
 
 ## Development
 
