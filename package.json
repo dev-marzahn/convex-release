@@ -3,13 +3,15 @@
   "private": true,
   "workspaces": [
     "packages/*",
-    "examples/*"
+    "examples/*",
+    "e2e/apps/*"
   ],
   "type": "module",
   "scripts": {
     "ready": "vp run -r build && vp check && vp run -r test",
     "build": "vp run -r build",
-    "test": "vp run -r test"
+    "test": "vp run -r test",
+    "e2e": "node e2e/run.ts"
   },
   "devDependencies": {
     "@types/node": "catalog:",

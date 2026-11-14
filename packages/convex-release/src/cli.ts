@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { existsSync, mkdirSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 
 import * as p from '@clack/prompts';
 import { Command } from 'commander';
 
 import pkg from '../package.json' with { type: 'json' };
+import { bundle } from './bundle.ts';
 import { writeGenerated } from './codegen.ts';
 import { runInteractive } from './convex-cli.ts';
 import { detectPackageManager, ensureConvexConfig, installPackages, missingPackages, writeDockerFiles } from './init.ts';
@@ -132,6 +133,18 @@ program
     const { changed, migrations } = writeGenerated(project);
     const where = relative(project.root, project.migrationsDir);
     p.log.success(`${changed ? 'Wrote' : 'Up to date:'} ${where}/_generated.ts (${migrations.length} migration${migrations.length === 1 ? '' : 's'})`);
+  });
+
+program
+  .command('bundle')
+  .description('Write the push requests a release image applies (run by the image build).')
+  .argument('[outDir]', 'where to write push.json and push.relaxed.json', '.convex-release')
+  .action((outDir: string) => {
+    const project = findProject();
+    const result = bundle(project, resolve(outDir));
+    p.log.success(
+      `Bundled ${result.modules} modules${result.relaxed ? ` and ${result.migrations} migration${result.migrations === 1 ? '' : 's'} (two passes)` : ' (no migrations: one pass)'}`,
+    );
   });
 
 async function runRelease(project: Project, target: ReleaseTarget) {

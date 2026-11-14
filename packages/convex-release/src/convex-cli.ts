@@ -9,7 +9,8 @@ import type { Project } from './project.ts';
 
 export class ConvexCliError extends Error {}
 
-function convexBin(project: Project): string {
+/** The project's installed `convex` CLI. */
+export function convexBin(project: Project): string {
   try {
     const require = createRequire(join(project.root, 'package.json'));
     const pkg = require.resolve('convex/package.json');

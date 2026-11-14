@@ -11,6 +11,41 @@
         "vite-plus": "catalog:",
       },
     },
+    "e2e/apps/v1": {
+      "name": "e2e-app-v1",
+      "dependencies": {
+        "@convex-dev/migrations": "catalog:",
+        "@dev-marzahn/convex-release": "workspace:*",
+        "convex": "catalog:",
+      },
+    },
+    "e2e/apps/v2": {
+      "name": "e2e-app-v2",
+      "dependencies": {
+        "@convex-dev/migrations": "catalog:",
+        "@dev-marzahn/convex-release": "workspace:*",
+        "convex": "catalog:",
+      },
+    },
+    "e2e/apps/v3": {
+      "name": "e2e-app-v3",
+      "dependencies": {
+        "@convex-dev/migrations": "catalog:",
+        "@dev-marzahn/convex-release": "workspace:*",
+        "convex": "catalog:",
+      },
+    },
+    "e2e/apps/v4": {
+      "name": "e2e-app-v4",
+      "dependencies": {
+        "@convex-dev/migrations": "catalog:",
+        "@dev-marzahn/convex-release": "workspace:*",
+        "convex": "catalog:",
+      },
+      "devDependencies": {
+        "@types/node": "catalog:",
+      },
+    },
     "examples/basic": {
       "name": "example-basic",
       "dependencies": {
@@ -361,6 +396,14 @@
     "detect-libc": ["detect-libc@2.1.2", "", {}, "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ=="],
 
     "dom-accessibility-api": ["dom-accessibility-api@0.5.16", "", {}, "sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg=="],
+
+    "e2e-app-v1": ["e2e-app-v1@workspace:e2e/apps/v1"],
+
+    "e2e-app-v2": ["e2e-app-v2@workspace:e2e/apps/v2"],
+
+    "e2e-app-v3": ["e2e-app-v3@workspace:e2e/apps/v3"],
+
+    "e2e-app-v4": ["e2e-app-v4@workspace:e2e/apps/v4"],
 
     "es-module-lexer": ["es-module-lexer@2.3.2", "", {}, "sha512-poHGpORABojJJucnV9KbOavETW8lBVnphkW77ER5/BQ5Fz7oXSoCNek7IH3vR5nRjdsEz926ibFYX8KtLQmdyw=="],
 
