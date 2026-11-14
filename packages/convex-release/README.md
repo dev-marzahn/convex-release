@@ -10,9 +10,11 @@ It builds on [`@convex-dev/migrations`](https://www.convex.dev/components/migrat
 
 - [Quick start](#quick-start)
 - [Writing migrations](#writing-migrations)
+- [Seeding](#seeding)
 - [What a release does](#what-a-release-does)
 - [Commands](#commands)
 - [Self-hosted images](#self-hosted-images)
+- [Preview environments](#preview-environments)
 - [CI](#ci)
 - [Limits](#limits)
 
@@ -75,6 +77,62 @@ A few things to keep in mind:
 
 `convex/migrations/_generated.ts` wires the files up. `new`, `codegen`, `dev` and `deploy` rewrite it; commit it like Convex's `_generated/` folder.
 
+## Seeding
+
+Seeds fill an empty deployment with test data: your dev deployment, a preview, or the data `test-upgrade` starts from. Each file in `convex/seeds/` is one seed, and they run in the order of their number prefix:
+
+```sh
+bunx convex-release new users --seed --table users
+```
+
+```ts
+// convex/seeds/01_users.ts
+import { defineSeed } from './_generated';
+
+export default defineSeed('users', {
+  count: 20,
+  fields: {
+    name: ({ faker }) => faker.person.fullName(),
+    email: ({ i }) => `user${i}@example.com`,
+    role: 'member',
+  },
+});
+```
+
+```ts
+// convex/seeds/02_messages.ts
+export default defineSeed('messages', {
+  count: 250,
+  fields: {
+    text: ({ faker }) => faker.lorem.sentence(),
+    length: ({ doc }) => doc.text!.length,
+    authorId: ({ ref }) => ref('users'),
+  },
+});
+```
+
+`fields` takes the table's schema type, so TypeScript flags a missing field or a value of the wrong type. A field gets a fixed value or a function that receives:
+
+- `faker`: a [Faker](https://fakerjs.dev) instance, seeded per document, so each run writes the same data.
+- `i`: the document's number in this seed, from 0.
+- `doc`: the fields generated so far, in the order you list them.
+- `ref(table)`: the id of a random document in that table, from its first 1000. Seed that table in an earlier file.
+
+For anything else, pass a function. It runs as one mutation:
+
+```ts
+// convex/seeds/03_admin.ts
+export default defineSeed(async (ctx, { faker }) => {
+  const admin = await ctx.db.insert('users', { name: 'Admin', email: 'admin@example.com', role: 'admin' });
+  const text = faker.lorem.paragraph();
+  await ctx.db.insert('messages', { text, length: text.length, authorId: admin });
+});
+```
+
+Seeds only run on a deployment with no documents in its tables. `convex-release dev` runs them after the release when the dev deployment is empty, `convex-release seed` runs them by hand (`--force` seeds a deployment with data), and the release images run them when you set `CONVEX_RELEASE_SEED=true`.
+
+A table seed writes 100 documents per transaction (`batchSize` changes that), and the whole run is one action, so it has an action's 10-minute limit.
+
 ## What a release does
 
 `dev`, `deploy` and the release images run the same steps:
@@ -93,8 +151,9 @@ If a migration throws, the release stops after step 3 and reports the error. You
 | Command                       | What it does                                                                                                                                  |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `init`                        | Sets up the packages and the migrations component. `--docker` adds the Docker files, `--ci` the GitHub Actions workflows.                     |
-| `new <name> --table <table>`  | Creates the next numbered migration.                                                                                                          |
-| `dev`                         | Releases to your dev deployment, then runs `convex dev`. `--once` stops after the release.                                                    |
+| `new <name> --table <table>`  | Creates the next numbered migration. `--seed` creates the next seed file instead.                                                             |
+| `dev`                         | Releases to your dev deployment, seeds it if it's empty, then runs `convex dev`. `--once` stops after the release.                            |
+| `seed`                        | Runs the seeds on a deployment without data. `--force` seeds one with data.                                                                   |
 | `deploy`                      | Releases to the deployment `convex deploy` would use: prod, the one a `CONVEX_DEPLOY_KEY` names, a self-hosted URL, or `--deployment <name>`. |
 | `status`                      | Lists each migration as done, pending or failed on the deployment, with document counts.                                                      |
 | `check`                       | Dry-runs the schema against the deployment's data.                                                                                            |
@@ -104,7 +163,7 @@ If a migration throws, the release stops after step 3 and reports the error. You
 | `test-upgrade --from <image>` | Upgrades a previous release's data to this one in throwaway containers.                                                                       |
 | `bundle [dir]`                | Writes the files a release image applies. The image build runs it.                                                                            |
 
-`status` and `check` take `--prod` and `--deployment <name>` and default to your dev deployment. Both take `--json`. `dev` and `deploy` take `--timeout <seconds>`: when it runs out, the command exits with code 1 and the migrations keep going on the deployment. The next release waits for them and finishes.
+`status`, `check` and `seed` take `--prod` and `--deployment <name>` and default to your dev deployment. All three take `--json`. `dev` and `deploy` take `--timeout <seconds>`: when it runs out, the command exits with code 1 and the migrations keep going on the deployment. The next release waits for them and finishes.
 
 Outside a terminal, the commands print one line per step instead of spinners, and `new` fails instead of asking for a missing argument. On GitHub Actions, `deploy` and `status` add a migrations table to the job summary, and `test-upgrade` adds the upgrade's duration and log.
 
@@ -190,6 +249,30 @@ FROM ghcr.io/dev-marzahn/convex-release:0.1.0-runtime
 COPY --from=bundle /convex/app/ /convex/app/
 ```
 
+## Preview environments
+
+A preview runs a pull request's image on its own volume. Three settings on the container make that work; leave all three unset in production:
+
+| Variable                            | Effect                                                                                                                                                        |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CONVEX_RELEASE_SEED=true`          | Runs your seeds after the release when the deployment has no data.                                                                                            |
+| `CONVEX_RELEASE_SNAPSHOT=<path>`    | Imports a `convex export` zip (a file in the container, or an `https://` URL) into an empty deployment, then runs the migrations the snapshot hasn't had yet. |
+| `CONVEX_RELEASE_ON_DOWNGRADE=reset` | Deletes all data instead of refusing to start when the data has migrations this release doesn't know.                                                         |
+
+The reset covers a branch that renames or renumbers a migration after its preview already ran it. Without it, the preview refuses to start until you delete its volume. A snapshot from a newer release still makes the container exit, since a reset would import and wipe it again on every start.
+
+The snapshot holds the data of wherever you exported it, and the preview runs the pull request's code on it. Export from a staging deployment or strip personal data first.
+
+### Coolify
+
+Coolify deploys each pull request of a Git-based app as a preview with its own URL, environment variables and volumes, and deletes it when the pull request closes. With the combined image's one-line `Dockerfile`:
+
+1. Turn on preview deployments for the app and set a URL template like `{{pr_id}}.api.example.com`, with a wildcard DNS record for it.
+2. Under the preview environment variables, set `INSTANCE_NAME`, an `INSTANCE_SECRET` that differs from production's, `CONVEX_RELEASE_SEED=true` and `CONVEX_RELEASE_ON_DOWNGRADE=reset`.
+3. Keep previews of pull requests from forks off: the preview runs the pull request's code on your server.
+
+Each push to the pull request rebuilds the image and starts it on the preview's volume, so a migration added later in the branch runs on the data the preview already has.
+
 ## CI
 
 `convex-release init --ci` writes two GitHub Actions workflows. Edit them like any other workflow.
@@ -214,7 +297,7 @@ bunx convex-release test-upgrade --from ghcr.io/you/my-app:1.3.0 \
   --check testing:verify
 ```
 
-Without `--to`, it builds the current project first. `--seed` and `--check` take a function name and optional JSON arguments; `--check` should throw if the data looks wrong. Both images have to be combined images, since the test waits for their health check.
+Without `--to`, it builds the current project first. `--seed` alone runs the previous release's own seeds. `--seed` with a value and `--check` take a function name and optional JSON arguments; `--check` should throw if the data looks wrong. Both images have to be combined images, since the test waits for their health check.
 
 ### Rehearsing on real data
 
@@ -231,6 +314,7 @@ The export holds the migrations component's records too, so the rehearsal runs t
 
 - Bundling uses two hidden `convex deploy` flags (`--write-push-request`, `--push-all-modules`). Each convex-release release pins the backend image it tests against and supports `convex` 1.50 and later.
 - Between steps 2 and 4 your new code runs against data the migrations haven't reached yet, as with any online Convex migration. Write code that handles both shapes until the release finishes.
+- The Coolify steps follow Coolify's documentation; nobody has run them on a Coolify server yet.
 - The images are for self-hosted Convex. `dev` and `deploy` use the `convex` CLI, so they work wherever it does; the end-to-end tests cover self-hosted deployments.
 
 ## License

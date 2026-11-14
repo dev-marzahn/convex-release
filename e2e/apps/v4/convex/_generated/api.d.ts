@@ -14,6 +14,9 @@ import type * as migrations_0002_add_length from "../migrations/0002_add_length.
 import type * as migrations_0003_author_to_users from "../migrations/0003_author_to_users.js";
 import type * as migrations__generated from "../migrations/_generated.js";
 import type * as nodeHash from "../nodeHash.js";
+import type * as seeds_01_users from "../seeds/01_users.js";
+import type * as seeds_02_messages from "../seeds/02_messages.js";
+import type * as seeds__generated from "../seeds/_generated.js";
 import type * as users from "../users.js";
 
 import type {
@@ -29,6 +32,9 @@ declare const fullApi: ApiFromModules<{
   "migrations/0003_author_to_users": typeof migrations_0003_author_to_users;
   "migrations/_generated": typeof migrations__generated;
   nodeHash: typeof nodeHash;
+  "seeds/01_users": typeof seeds_01_users;
+  "seeds/02_messages": typeof seeds_02_messages;
+  "seeds/_generated": typeof seeds__generated;
   users: typeof users;
 }>;
 

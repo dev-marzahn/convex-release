@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { listMigrations } from './codegen.ts';
+import { listMigrations, listSeeds } from './codegen.ts';
 import type { Project } from './project.ts';
 
 /** "Rename body to text" -> "rename_body_to_text". */
@@ -32,6 +32,34 @@ export default defineMigration({
   },
 });
 `;
+}
+
+export function renderSeed(table: string): string {
+  return `import { defineSeed } from "./_generated";
+
+export default defineSeed(${JSON.stringify(table)}, {
+  count: 10,
+  fields: {
+    // One generator per field; TypeScript lists the ones still missing.
+    //
+    //   name: ({ faker }) => faker.person.fullName(),
+    //   email: ({ i }) => \`user\${i}@example.com\`,
+    //   authorId: ({ ref }) => ref("users"),
+  },
+});
+`;
+}
+
+/** `convex-release new <name> --seed`: the next numbered seed file. */
+export function createSeed(project: Project, name: string, table: string): string {
+  const numbers = listSeeds(project.seedsDir).map((s) => Number(/^(\d+)_/.exec(s)?.[1] ?? 0));
+  const next = Math.max(0, ...numbers) + 1;
+  const file = `${String(next).padStart(2, '0')}_${migrationSlug(name)}.ts`;
+  const path = join(project.seedsDir, file);
+  if (existsSync(path)) throw new Error(`${file} already exists.`);
+  mkdirSync(project.seedsDir, { recursive: true });
+  writeFileSync(path, renderSeed(table));
+  return path;
 }
 
 export function createMigration(project: Project, name: string, table: string): string {

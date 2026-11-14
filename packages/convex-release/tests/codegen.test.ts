@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, test } from 'vite-plus/test';
 
-import { listMigrations, MigrationFileError, renderGenerated, writeGenerated } from '../src/codegen.ts';
+import { listMigrations, listSeeds, MigrationFileError, renderGenerated, renderSeedsGenerated, writeGenerated } from '../src/codegen.ts';
 import { findProject } from '../src/project.ts';
 
 function project(files: Record<string, string>, convexJson?: object) {
@@ -78,5 +78,53 @@ describe('writeGenerated', () => {
     expect(writeGenerated(p).changed).toBe(true);
     expect(writeGenerated(p).changed).toBe(false);
     expect(readFileSync(join(p.migrationsDir, '_generated.ts'), 'utf8')).toContain('internal.migrations["0001_a"]');
+  });
+
+  test('writes the seeds file only when there is a seeds folder', () => {
+    const p = project({ 'convex/migrations/0001_a.ts': '' });
+    expect(writeGenerated(p).seeds).toBeNull();
+    expect(existsSync(join(p.seedsDir, '_generated.ts'))).toBe(false);
+
+    mkdirSync(p.seedsDir);
+    writeFileSync(join(p.seedsDir, '01_users.ts'), '');
+    expect(writeGenerated(p)).toMatchObject({ changed: true, seeds: ['01_users'] });
+    expect(readFileSync(join(p.seedsDir, '_generated.ts'), 'utf8')).toContain('internal.seeds["01_users"]');
+  });
+});
+
+describe('listSeeds', () => {
+  test('orders by number prefix, then by name', () => {
+    const p = project({
+      'convex/seeds/10_comments.ts': '',
+      'convex/seeds/2_messages.ts': '',
+      'convex/seeds/01_users.ts': '',
+      'convex/seeds/extra.ts': '',
+      'convex/seeds/demo.ts': '',
+    });
+    expect(listSeeds(p.seedsDir)).toEqual(['01_users', '2_messages', '10_comments', 'demo', 'extra']);
+  });
+
+  test('ignores the generated file, helpers, tests and declarations', () => {
+    const p = project({
+      'convex/seeds/_generated.ts': '',
+      'convex/seeds/_fake.ts': '',
+      'convex/seeds/users.test.ts': '',
+      'convex/seeds/users.ts': '',
+    });
+    expect(listSeeds(p.seedsDir)).toEqual(['users']);
+  });
+
+  test("rejects names Convex can't use as a module", () => {
+    const p = project({ 'convex/seeds/my seed.ts': '' });
+    expect(() => listSeeds(p.seedsDir)).toThrow(MigrationFileError);
+  });
+});
+
+describe('renderSeedsGenerated', () => {
+  test('lists the seeds in order and imports the schema for the empty check', () => {
+    const out = renderSeedsGenerated(['01_users', '02_messages']);
+    expect(out).toContain('seeds.runner([\n  internal.seeds["01_users"].default,\n  internal.seeds["02_messages"].default,\n])');
+    expect(out).toContain('import schema from "../schema";');
+    expect(out).toContain('from "@dev-marzahn/convex-release/seed"');
   });
 });

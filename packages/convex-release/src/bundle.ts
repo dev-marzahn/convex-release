@@ -26,12 +26,14 @@ export interface BundleResult {
 export interface ReleaseManifest {
   /** Every migration this release knows, oldest first, as the component names them. */
   migrations: string[];
+  /** Whether `seeds/_generated:run` exists, for `CONVEX_RELEASE_SEED`. */
+  seeds: boolean;
 }
 
 export function bundle(project: Project, outDir: string): BundleResult {
-  const { migrations } = writeGenerated(project);
+  const { migrations, seeds } = writeGenerated(project);
   mkdirSync(outDir, { recursive: true });
-  const manifest: ReleaseManifest = { migrations: migrations.map((m) => functionName(m.module)) };
+  const manifest: ReleaseManifest = { migrations: migrations.map((m) => functionName(m.module)), seeds: (seeds?.length ?? 0) > 0 };
   writeFileSync(join(outDir, 'release.json'), JSON.stringify(manifest));
   // Both requests come from one copy: esbuild names shared chunks by path, so
   // two directories would give the same code different chunk names.
@@ -44,8 +46,15 @@ export function bundle(project: Project, outDir: string): BundleResult {
     rmSync(join(outDir, 'push.relaxed.json'), { force: true });
     if (migrations.length === 0) return { modules: moduleCount(strict), migrations: 0, relaxed: false };
     copy.relaxSchema();
-    const relaxed = writePushRequest(copy.project, join(outDir, 'push.relaxed.json'));
-    assertOnlySchemaDiffers(strict, relaxed);
+    const relaxedFile = join(outDir, 'push.relaxed.json');
+    const relaxed = writePushRequest(copy.project, relaxedFile);
+    // Pass 1 runs exactly pass 2's code: the strict request with only the
+    // schema module swapped. Functions that import the schema (the seeds
+    // wiring does) would otherwise be bundled with the relaxed wrapper.
+    if (JSON.stringify(relaxed.appDefinition.schema) === JSON.stringify(strict.appDefinition.schema)) {
+      throw new Error('Relaxing the schema changed nothing in the bundle.');
+    }
+    writeFileSync(relaxedFile, JSON.stringify({ ...strict, appDefinition: { ...strict.appDefinition, schema: relaxed.appDefinition.schema } }));
     return { modules: moduleCount(strict), migrations: migrations.length, relaxed: true };
   } finally {
     copy.dispose();
@@ -78,10 +87,4 @@ function writePushRequest(project: Project, outFile: string): PushRequest {
 
 function moduleCount(request: PushRequest): number {
   return request.appDefinition.changedModules.length;
-}
-
-/** Pass 1 must run exactly the code pass 2 runs; only the schema may differ. */
-function assertOnlySchemaDiffers(strict: PushRequest, relaxed: PushRequest) {
-  const strip = (r: PushRequest) => JSON.stringify({ ...r, appDefinition: { ...r.appDefinition, schema: null } });
-  if (strip(strict) !== strip(relaxed)) throw new Error('The validation-off bundle differs from the strict one outside schema.js.');
 }

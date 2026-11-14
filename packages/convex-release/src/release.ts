@@ -14,6 +14,7 @@ import { push, runFunction, type PushTarget } from './convex-cli.ts';
 import type { ReleaseStatus } from './index.ts';
 import type { Project } from './project.ts';
 import { copyProject } from './relaxed.ts';
+import type { SeedResult } from './seed.ts';
 import { readStatus, type MigrationRow } from './status.ts';
 
 export const START = 'migrations/_generated:start';
@@ -134,6 +135,13 @@ export async function release(project: Project, target: ReleaseTarget, events: R
   events.step('Pushing with schema validation on');
   push(project, target.push);
   return result;
+}
+
+export const SEED = 'seeds/_generated:run';
+
+/** Runs the deployed seeds. Without `force`, only on a deployment without data. */
+export function runSeeds(project: Project, runArgs: string[], force = false): SeedResult {
+  return runFunction<SeedResult>(project, SEED, runArgs, { force });
 }
 
 export class MigrationTimeout extends Error {}

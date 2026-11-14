@@ -28,6 +28,7 @@
   "exports": {
     ".": "./dist/index.mjs",
     "./cli": "./dist/cli.mjs",
+    "./seed": "./dist/seed.mjs",
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -41,6 +42,7 @@
   },
   "dependencies": {
     "@clack/prompts": "catalog:",
+    "@faker-js/faker": "catalog:",
     "commander": "catalog:"
   },
   "devDependencies": {

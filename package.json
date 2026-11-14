@@ -35,6 +35,7 @@
   "catalog": {
     "@clack/prompts": "^1.9.0",
     "@convex-dev/migrations": "^0.3.8",
+    "@faker-js/faker": "^10.6.0",
     "@types/node": "^26.6.6",
     "commander": "^15.1.0",
     "convex": "^1.50.0",

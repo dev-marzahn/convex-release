@@ -4,7 +4,7 @@ import { basename, join } from 'node:path';
 
 import { describe, expect, test } from 'vite-plus/test';
 
-import { createMigration, migrationSlug } from '../src/new.ts';
+import { createMigration, createSeed, migrationSlug } from '../src/new.ts';
 import { findProject } from '../src/project.ts';
 
 describe('migrationSlug', () => {
@@ -36,5 +36,22 @@ describe('createMigration', () => {
   test('starts at 0001', () => {
     const root = mkdtempSync(join(tmpdir(), 'convex-release-new-'));
     expect(basename(createMigration(findProject(root), 'first', 'users'))).toBe('0001_first.ts');
+  });
+});
+
+describe('createSeed', () => {
+  test('numbers after the highest numbered seed, ignoring unnumbered ones', () => {
+    const root = mkdtempSync(join(tmpdir(), 'convex-release-new-'));
+    mkdirSync(join(root, 'convex/seeds'), { recursive: true });
+    writeFileSync(join(root, 'convex/seeds/03_users.ts'), '');
+    writeFileSync(join(root, 'convex/seeds/extra.ts'), '');
+    const path = createSeed(findProject(root), 'messages', 'messages');
+    expect(basename(path)).toBe('04_messages.ts');
+    expect(readFileSync(path, 'utf8')).toContain('defineSeed("messages", {');
+  });
+
+  test('starts at 01', () => {
+    const root = mkdtempSync(join(tmpdir(), 'convex-release-new-'));
+    expect(basename(createSeed(findProject(root), 'users', 'users'))).toBe('01_users.ts');
   });
 });

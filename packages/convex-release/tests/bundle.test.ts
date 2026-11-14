@@ -31,5 +31,14 @@ test('writes a strict and a validation-off push request that differ only in the 
   );
   expect(strict.appDefinition.schema.source).not.toContain('schemaValidation = !1');
   expect(relaxed.appDefinition.schema.source).toContain('schemaValidation = !1');
+  // The seeds wiring imports the schema, so a separately bundled relaxed copy
+  // would differ here; pass 1 has to run pass 2's code exactly.
+  expect(strict.appDefinition.changedModules.map((m) => m.path)).toContain('seeds/_generated.js');
   expect(relaxed.appDefinition.changedModules).toEqual(strict.appDefinition.changedModules);
+
+  const manifest = JSON.parse(readFileSync(join(out, 'release.json'), 'utf8')) as { migrations: string[]; seeds: boolean };
+  expect(manifest).toEqual({
+    migrations: ['migrations/0001_rename_body_to_text', 'migrations/0002_add_length', 'migrations/0003_author_to_users'],
+    seeds: true,
+  });
 });

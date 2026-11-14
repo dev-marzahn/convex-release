@@ -42,6 +42,7 @@ export function copyProject(project: Project): ProjectCopy {
     functionsDir,
     functionsPath: project.functionsPath,
     migrationsDir: join(functionsDir, 'migrations'),
+    seedsDir: join(functionsDir, 'seeds'),
   };
   return {
     project: copy,

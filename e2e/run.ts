@@ -85,8 +85,11 @@ interface Run {
   log: string[];
 }
 
-/** Starts a combined app image on `volume` and waits until it's healthy or has exited. */
-async function runCombined(version: string, volume: string): Promise<Run> {
+/**
+ * Starts a combined app image on `volume` and waits until it's healthy or has
+ * exited. `extra` goes to `docker run`, e.g. `-e CONVEX_RELEASE_SEED=true`.
+ */
+async function runCombined(version: string, volume: string, extra: string[] = []): Promise<Run> {
   const name = container('app');
   spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore' });
   docker(
@@ -102,6 +105,7 @@ async function runCombined(version: string, volume: string): Promise<Run> {
     `INSTANCE_SECRET=${SECRET}`,
     '-v',
     `${PREFIX}-${volume}:/convex/data`,
+    ...extra,
     `${PREFIX}-app:${version}`,
   );
   for (;;) {
@@ -315,6 +319,53 @@ const scenarios: Record<string, () => Promise<void>> = {
       expect(out.includes('running: 2/3 migrations done') || out.includes('done: 3/3'), out);
       expect(!out.includes('0/3'), `migrations from the snapshot ran again:\n${out}`);
       log(`  ${out.trim().split('\n').at(-1)}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+
+  /** What a preview environment uses: seeds on an empty volume, a reset on downgrade, a snapshot on first start. */
+  async preview() {
+    const seed = ['-e', 'CONVEX_RELEASE_SEED=true'];
+    const has = (run: Run, text: string) => run.log.some((l) => l.includes(text));
+    const seeded = await runCombined('v4', 'pr', seed);
+    expect(seeded.healthy && has(seeded, 'seeded: 01_users (20), 02_messages (250)'), `seeding failed:\n${seeded.log.join('\n')}`);
+    let summary = await check();
+    expect(summary.wellFormed === 250 && summary.users === 20, `seeded data: ${JSON.stringify(summary)}`);
+    log(`  first start seeds: ${JSON.stringify(summary)}`);
+
+    const restarted = await runCombined('v4', 'pr', seed);
+    expect(restarted.healthy && has(restarted, 'not seeding'), `restart seeded again:\n${restarted.log.join('\n')}`);
+    expect((await check()).messages === 250, 'restart changed the data');
+    log('  restart: not seeded again');
+
+    // v3 lacks 0003, which the data has: refused by default, wiped with reset.
+    const refused = await runCombined('v3', 'pr');
+    expect(!refused.healthy && refused.exitCode === 1, `v3 should refuse without reset, got exit ${refused.exitCode}`);
+    const reset = await runCombined('v3', 'pr', ['-e', 'CONVEX_RELEASE_ON_DOWNGRADE=reset']);
+    expect(reset.healthy && has(reset, 'deleting all data'), `reset failed:\n${reset.log.join('\n')}`);
+    const reseeded = await runCombined('v4', 'pr', seed);
+    expect(has(reseeded, 'seeded:'), `v4 didn't find the reset volume empty:\n${reseeded.log.join('\n')}`);
+    log('  v3 with reset: wiped; v4 seeded the empty volume again');
+
+    // A v3 export as the preview's starting data: v4 imports it and runs 0003 alone.
+    await runCombined('v1', 'src');
+    await call('messages:seed', { chunk: 0, size: 300, authors: 15 });
+    await runCombined('v3', 'src');
+    const dir = mkdtempSync(join(tmpdir(), `${PREFIX}-snapshot-`));
+    const zip = join(dir, 'prod.zip');
+    try {
+      sh(join(ROOT, 'e2e/apps/v3/node_modules/.bin/convex'), ['export', '--path', zip], {
+        cwd: join(ROOT, 'e2e/apps/v3'),
+        env: { ...process.env, CONVEX_SELF_HOSTED_URL: URL, CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey(), CONVEX_DEPLOYMENT: '' },
+      });
+      const fromSnapshot = await runCombined('v4', 'pr2', ['-v', `${zip}:/snapshot.zip:ro`, '-e', 'CONVEX_RELEASE_SNAPSHOT=/snapshot.zip', ...seed]);
+      expect(fromSnapshot.healthy, `snapshot start failed:\n${fromSnapshot.log.join('\n')}`);
+      expect(has(fromSnapshot, 'imported snapshot.zip'), `no import:\n${fromSnapshot.log.join('\n')}`);
+      expect(!has(fromSnapshot, '0/3') && has(fromSnapshot, 'not seeding'), fromSnapshot.log.join('\n'));
+      summary = await check();
+      expect(summary.wellFormed === 300 && summary.users === 15, `snapshot data: ${JSON.stringify(summary)}`);
+      log(`  snapshot: imported and migrated, ${JSON.stringify(summary)}`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

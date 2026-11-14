@@ -9,14 +9,15 @@ import pkg from '../package.json' with { type: 'json' };
 import { bundle } from './bundle.ts';
 import { check } from './check.ts';
 import { writeWorkflows } from './ci.ts';
-import { writeGenerated } from './codegen.ts';
+import { listSeeds, writeGenerated } from './codegen.ts';
 import { runInteractive } from './convex-cli.ts';
 import { build, testUpgrade } from './docker.ts';
 import { appImageName } from './images.ts';
 import { detectPackageManager, ensureConvexConfig, installPackages, missingPackages, writeDockerFiles } from './init.ts';
-import { createMigration } from './new.ts';
+import { createMigration, createSeed } from './new.ts';
 import { findProject, type Project } from './project.ts';
-import { checkTarget, deployTarget, devTarget, MigrationTimeout, release, type ReleaseTarget } from './release.ts';
+import { checkTarget, deployTarget, devTarget, MigrationTimeout, release, runSeeds, SEED, type ReleaseTarget } from './release.ts';
+import type { SeedResult } from './seed.ts';
 import { readStatus } from './status.ts';
 import { interactive, jobSummary, migrationsMarkdown, progress, requireAnswer } from './ui.ts';
 import { defaultBase, repoPath, verify } from './verify.ts';
@@ -36,6 +37,10 @@ program
   .action(async (convexDevArgs: string[], options: { once?: boolean; timeout?: string }) => {
     const project = findProject();
     await runRelease(project, devTarget, seconds(options.timeout));
+    if (listSeeds(project.seedsDir).length > 0) {
+      const result = runSeeds(project, devTarget.runArgs);
+      if (result.seeded) p.log.success(`Seeded the empty deployment: ${seedSummary(result)}`);
+    }
     if (options.once) return;
     p.log.info('Handing over to `convex dev`');
     process.exit(runInteractive(project, ['dev', ...convexDevArgs]));
@@ -198,16 +203,41 @@ program
 
 program
   .command('new')
-  .description('Create the next numbered migration.')
+  .description('Create the next numbered migration, or with --seed the next seed file.')
   .argument('[name]', 'what it does, e.g. "rename body to text"')
-  .option('-t, --table <table>', 'the table it migrates')
-  .action(async (nameArg: string | undefined, options: { table?: string }) => {
+  .option('-t, --table <table>', 'the table it migrates or seeds')
+  .option('--seed', 'create a seed in convex/seeds/ instead of a migration')
+  .action(async (nameArg: string | undefined, options: { table?: string; seed?: boolean }) => {
     const project = findProject();
-    const name = requireAnswer(nameArg, 'the migration name') ?? (await ask('What does the migration do?', 'rename body to text'));
-    const table = requireAnswer(options.table, '--table') ?? (await ask('Which table does it migrate?', 'messages'));
-    const path = createMigration(project, name, table);
+    const kind = options.seed ? 'seed' : 'migration';
+    const name =
+      requireAnswer(nameArg, `the ${kind} name`) ??
+      (await ask(options.seed ? 'What does the seed add?' : 'What does the migration do?', options.seed ? 'users' : 'rename body to text'));
+    const table =
+      requireAnswer(options.table, '--table') ?? (await ask(`Which table does it ${options.seed ? 'seed' : 'migrate'}?`, options.seed ? 'users' : 'messages'));
+    const path = options.seed ? createSeed(project, name, table) : createMigration(project, name, table);
     writeGenerated(project);
     p.log.success(`Created ${relative(project.root, path)}`);
+  });
+
+program
+  .command('seed')
+  .description('Run the seeds in convex/seeds/ on a deployment without data (dev by default).')
+  .option('--prod', "the project's production deployment")
+  .option('--deployment <name>', 'a specific deployment')
+  .option('--force', 'seed even if the deployment already has data')
+  .option('--json', 'print the result as JSON')
+  .action((options: { prod?: boolean; deployment?: string; force?: boolean; json?: boolean }) => {
+    const project = findProject();
+    if (listSeeds(project.seedsDir).length === 0) throw new Error('No seeds yet. Create one with `convex-release new users --seed --table users`.');
+    const runArgs = options.deployment ? ['--deployment', options.deployment] : options.prod ? ['--prod'] : [];
+    const result = runSeeds(project, runArgs, options.force);
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    if (result.seeded) p.log.success(`Seeded: ${seedSummary(result)}`);
+    else p.log.info(`Nothing seeded: ${result.reason}. \`--force\` seeds anyway.`);
   });
 
 program
@@ -250,12 +280,13 @@ program
   .description('Check that the new release upgrades data from a previous one: starts --from, then --to on the same volume.')
   .requiredOption('--from <image>', 'the release users run today, e.g. my-app:1.3.0')
   .option('--to <image>', 'the new release (default: build this project first)')
-  .option('--seed <function>', 'a function to run on --from to create data, e.g. testing:seed')
+  .option('--seed [function]', 'create data on --from: its own seeds, or a function such as testing:seed')
   .option('--check <function>', 'a function to run on --to afterwards; it should throw if the data is wrong')
   .option('--snapshot <zip>', 'a `convex export` zip to import into --from first: a rehearsal on a copy of real data')
   .option('--timeout <seconds>', 'how long each release may take to become ready', '600')
-  .action(async (options: { from: string; to?: string; seed?: string; check?: string; snapshot?: string; timeout: string }) => {
+  .action(async (options: { from: string; to?: string; seed?: string | true; check?: string; snapshot?: string; timeout: string }) => {
     const project = findProject();
+    const seed = options.seed === true ? `${SEED} {"force": true}` : options.seed;
     let to = options.to;
     if (!to) {
       to = appImageName(project);
@@ -267,7 +298,7 @@ program
     let result;
     try {
       result = await testUpgrade(
-        { from: options.from, to, seed: options.seed, check: options.check, snapshot: options.snapshot, project, timeoutMs: seconds(options.timeout) },
+        { from: options.from, to, seed, check: options.check, snapshot: options.snapshot, project, timeoutMs: seconds(options.timeout) },
         {
           step: (message) => {
             current = message;
@@ -324,6 +355,10 @@ function summarize(project: Project, target: ReleaseTarget, title: string) {
   } catch {
     jobSummary(`### ${title}\n`);
   }
+}
+
+function seedSummary(result: SeedResult): string {
+  return result.seeds.map((s) => `${s.name.replace(/^seeds\//, '')} (${s.documents} doc${s.documents === 1 ? '' : 's'})`).join(', ') || 'no seeds';
 }
 
 async function ask(message: string, placeholder: string): Promise<string> {

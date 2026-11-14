@@ -11,6 +11,8 @@ export interface Project {
   functionsPath: string;
   /** `<functions>/migrations`. */
   migrationsDir: string;
+  /** `<functions>/seeds`. */
+  seedsDir: string;
 }
 
 export function findProject(root = process.cwd()): Project {
@@ -27,5 +29,6 @@ export function findProject(root = process.cwd()): Project {
     functionsDir,
     functionsPath,
     migrationsDir: join(functionsDir, 'migrations'),
+    seedsDir: join(functionsDir, 'seeds'),
   };
 }
