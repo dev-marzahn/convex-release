@@ -323,6 +323,10 @@ if (process.env.CONVEX_URL) {
     log(`deploy failed: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   });
+} else if (!existsSync('./run_backend.sh')) {
+  // The one-shot image has no backend of its own.
+  log('deploy failed: set CONVEX_URL to the backend this image deploys to.');
+  process.exit(1);
 } else {
   combined();
 }

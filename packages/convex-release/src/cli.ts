@@ -25,7 +25,12 @@ import { defaultBase, repoPath, verify } from './verify.ts';
 const program = new Command('convex-release').description('Data migrations and self-hosted Docker releases for Convex apps.').version(pkg.version);
 
 const label = (name: string) => name.replace(/^migrations\//, '');
-const seconds = (value: string | undefined) => (value === undefined ? undefined : Number(value) * 1000);
+function seconds(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`--timeout takes a number of seconds, not \`${value}\`.`);
+  return n * 1000;
+}
 
 program
   .command('dev')
