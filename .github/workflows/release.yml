@@ -9,6 +9,13 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Re-runs a release from the selected branch, for when a tag's run failed for
+  # reasons outside the package. The version check still applies.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag, like v100.0.0
+        required: true
 
 permissions:
   contents: read
@@ -26,10 +33,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - id: version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           version=$(node -p "require('./packages/convex-release/package.json').version")
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME doesn't match packages/convex-release/package.json version $version"
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::Tag $TAG doesn't match packages/convex-release/package.json version $version"
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -106,7 +115,11 @@ jobs:
       - name: Pack
         working-directory: packages/convex-release
         run: bun pm pack --destination "$RUNNER_TEMP" --quiet
+      # Outside the repo: its devEngines names Bun, and npm refuses to run under it.
+      # npm only accepts provenance from public repos.
       - name: Publish
+        working-directory: ${{ runner.temp }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish "$RUNNER_TEMP"/*.tgz --provenance --access public
+          PROVENANCE: ${{ github.event.repository.private && '--no-provenance' || '--provenance' }}
+        run: npm publish ./*.tgz "$PROVENANCE" --access public
