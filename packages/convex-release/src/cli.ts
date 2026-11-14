@@ -15,20 +15,25 @@ import { appImageName } from './images.ts';
 import { detectPackageManager, ensureConvexConfig, installPackages, missingPackages, writeDockerFiles } from './init.ts';
 import { createMigration } from './new.ts';
 import { findProject, type Project } from './project.ts';
-import { checkTarget, deployTarget, devTarget, release, type ReleaseTarget } from './release.ts';
+import { checkTarget, deployTarget, devTarget, MigrationTimeout, release, type ReleaseTarget } from './release.ts';
 import { readStatus } from './status.ts';
+import { interactive, jobSummary, migrationsMarkdown, progress, requireAnswer } from './ui.ts';
 
 const program = new Command('convex-release').description('Data migrations and self-hosted Docker releases for Convex apps.').version(pkg.version);
+
+const label = (name: string) => name.replace(/^migrations\//, '');
+const seconds = (value: string | undefined) => (value === undefined ? undefined : Number(value) * 1000);
 
 program
   .command('dev')
   .description('Release to your dev deployment (code, then pending migrations), then keep watching like `convex dev`.')
   .option('--once', 'release once and exit instead of watching')
+  .option('--timeout <seconds>', 'stop waiting for migrations after this long')
   .allowUnknownOption()
   .argument('[convexDevArgs...]', 'passed on to `convex dev`')
-  .action(async (convexDevArgs: string[], options: { once?: boolean }) => {
+  .action(async (convexDevArgs: string[], options: { once?: boolean; timeout?: string }) => {
     const project = findProject();
-    await runRelease(project, devTarget);
+    await runRelease(project, devTarget, seconds(options.timeout));
     if (options.once) return;
     p.log.info('Handing over to `convex dev`');
     process.exit(runInteractive(project, ['dev', ...convexDevArgs]));
@@ -38,9 +43,10 @@ program
   .command('deploy')
   .description('Release to the deployment `convex deploy` targets: prod, a deploy key, or a self-hosted URL.')
   .option('--deployment <name>', 'a specific deployment, as `convex deploy` takes it')
-  .action(async (options: { deployment?: string }) => {
+  .option('--timeout <seconds>', 'stop waiting for migrations after this long; they keep running on the deployment')
+  .action(async (options: { deployment?: string; timeout?: string }) => {
     const project = findProject();
-    await runRelease(project, deployTarget(project, options.deployment));
+    await runRelease(project, deployTarget(project, options.deployment), seconds(options.timeout));
   });
 
 program
@@ -78,7 +84,7 @@ program
     p.log.success(`Wrote ${relative(project.root, project.migrationsDir)}/_generated.ts`);
 
     let docker = options.docker;
-    if (docker === undefined) {
+    if (docker === undefined && interactive) {
       const answer = await p.confirm({ message: 'Also set up a Docker release image (Dockerfile, compose.yaml)?', initialValue: true });
       docker = !p.isCancel(answer) && answer;
     }
@@ -96,16 +102,21 @@ program
   .description('Show each migration as the deployment has recorded it (dev by default).')
   .option('--prod', "the project's production deployment")
   .option('--deployment <name>', 'a specific deployment')
-  .action((options: { prod?: boolean; deployment?: string }) => {
+  .option('--json', 'print the rows as JSON')
+  .action((options: { prod?: boolean; deployment?: string; json?: boolean }) => {
     const project = findProject();
     const runArgs = options.deployment ? ['--deployment', options.deployment] : options.prod ? ['--prod'] : [];
     const rows = readStatus(project, runArgs);
+    if (options.json) {
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+    jobSummary(migrationsMarkdown('Migrations', rows));
     if (rows.length === 0) {
       p.log.info('No migrations yet. Create one with `convex-release new`.');
       return;
     }
     const icon: Record<string, string> = { done: '✔', running: '…', pending: '○', failed: '✖', canceled: '✖' };
-    const label = (name: string) => name.replace(/^migrations\//, '');
     const width = Math.max(...rows.map((r) => label(r.name).length));
     const lines = rows.map((r) => {
       const detail = r.unknown ? '  not in this checkout: from a newer release' : r.error ? `  ${r.error.split('\n')[0]}` : '';
@@ -119,25 +130,31 @@ program
   .description("Check whether this checkout's schema accepts the deployment's data, without changing anything (dev by default).")
   .option('--prod', "the project's production deployment")
   .option('--deployment <name>', 'a specific deployment')
-  .action((options: { prod?: boolean; deployment?: string }) => {
+  .option('--json', 'print the result as JSON')
+  .addHelpText('after', "\nExit code 1 when the data doesn't match and no pending migration could change that; 0 otherwise.")
+  .action((options: { prod?: boolean; deployment?: string; json?: boolean }) => {
     const project = findProject();
-    const spinner = p.spinner();
-    spinner.start('Validating the schema against the data (dry run)');
+    const ui = options.json ? undefined : progress();
+    ui?.step('Validating the schema against the data (dry run)');
     const result = check(project, checkTarget(project, options));
-    const label = (name: string) => name.replace(/^migrations\//, '');
+    const needsMigration = !result.matches && result.pending.length === 0;
+    if (options.json) {
+      console.log(JSON.stringify({ ...result, needsMigration }, null, 2));
+      if (needsMigration) process.exit(1);
+      return;
+    }
     if (result.matches) {
-      spinner.stop('The schema accepts the data as it is.');
+      ui?.done('The schema accepts the data as it is.');
       if (result.pending.length > 0) p.log.info(`Pending migrations still run on release: ${result.pending.map(label).join(', ')}`);
       return;
     }
     const where = result.mismatch?.table ? `\`${result.mismatch.table}\`` : 'a table';
-    spinner.error(`Documents in ${where} don't match the schema: ${result.mismatch?.message}`);
-    if (result.pending.length > 0) {
-      p.log.warn(`Pending migrations run before the strict push: ${result.pending.map(label).join(', ')}. If they change ${where}, the release will pass.`);
-    } else {
+    ui?.fail(`Documents in ${where} don't match the schema: ${result.mismatch?.message}`);
+    if (needsMigration) {
       p.log.warn(`No migration is pending. Write one: convex-release new "what it changes" --table ${result.mismatch?.table ?? '<table>'}`);
       process.exit(1);
     }
+    p.log.warn(`Pending migrations run before the strict push: ${result.pending.map(label).join(', ')}. If they change ${where}, the release will pass.`);
   });
 
 program
@@ -147,8 +164,8 @@ program
   .option('-t, --table <table>', 'the table it migrates')
   .action(async (nameArg: string | undefined, options: { table?: string }) => {
     const project = findProject();
-    const name = nameArg ?? (await ask('What does the migration do?', 'rename body to text'));
-    const table = options.table ?? (await ask('Which table does it migrate?', 'messages'));
+    const name = requireAnswer(nameArg, 'the migration name') ?? (await ask('What does the migration do?', 'rename body to text'));
+    const table = requireAnswer(options.table, '--table') ?? (await ask('Which table does it migrate?', 'messages'));
     const path = createMigration(project, name, table);
     writeGenerated(project);
     p.log.success(`Created ${relative(project.root, path)}`);
@@ -205,54 +222,54 @@ program
       p.log.step(`Building ${to}`);
       build(project, { tag: to });
     }
-    const spinner = p.spinner();
-    let current: string | undefined;
+    const ui = progress();
+    let current = '';
     try {
       await testUpgrade(
-        { from: options.from, to, seed: options.seed, check: options.check, timeoutMs: Number(options.timeout) * 1000 },
+        { from: options.from, to, seed: options.seed, check: options.check, timeoutMs: seconds(options.timeout) },
         {
           step: (message) => {
-            if (current) spinner.stop(current);
-            spinner.start(message);
             current = message;
+            ui.step(message);
           },
-          log: (line) => spinner.message(`${current}: ${line}`),
+          log: (line) => ui.update(`${current}: ${line}`),
         },
       );
     } catch (err) {
-      spinner.error(current ?? 'Failed');
+      ui.fail();
       throw err;
     }
-    spinner.stop(current);
-    p.log.success(`${options.from} upgrades to ${to}`);
+    ui.done(`${options.from} upgrades to ${to}`);
   });
 
-async function runRelease(project: Project, target: ReleaseTarget) {
-  const spinner = p.spinner();
-  let current: string | undefined;
+async function runRelease(project: Project, target: ReleaseTarget, timeoutMs?: number) {
+  const ui = progress();
   let result;
   try {
-    result = await release(project, target, {
-      step: (message) => {
-        if (current) spinner.stop(current);
-        spinner.start(message);
-        current = message;
-      },
-      progress: (s) => {
-        current = `Ran migrations: ${s.message ?? s.state}`;
-        spinner.message(`Running migrations: ${s.message ?? s.state}`);
-      },
-    });
+    result = await release(project, target, { step: ui.step, progress: (s) => ui.update(`Running migrations: ${s.message ?? s.state}`) }, { timeoutMs });
   } catch (err) {
-    spinner.error(current ?? 'Failed');
+    ui.fail();
+    summarize(project, target, err instanceof MigrationTimeout ? 'Release still running: migrations continue on the deployment' : 'Release failed');
     throw err;
   }
   if (result.state !== 'done') {
-    spinner.error(result.message ?? 'Migrations failed');
+    ui.fail(result.message ?? 'Migrations failed');
+    summarize(project, target, 'Release failed');
     process.exit(1);
   }
-  spinner.stop(current);
+  ui.done();
+  summarize(project, target, 'Released');
   p.log.success('Released: code deployed, data matches the schema.');
+}
+
+/** The migrations table for the GitHub Actions job summary. Best effort. */
+function summarize(project: Project, target: ReleaseTarget, title: string) {
+  if (!process.env.GITHUB_STEP_SUMMARY) return;
+  try {
+    jobSummary(migrationsMarkdown(title, readStatus(project, target.runArgs)));
+  } catch {
+    jobSummary(`### ${title}\n`);
+  }
 }
 
 async function ask(message: string, placeholder: string): Promise<string> {

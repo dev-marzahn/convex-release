@@ -107,7 +107,13 @@ export interface ReleaseEvents {
   progress: (status: ReleaseStatus) => void;
 }
 
-export async function release(project: Project, target: ReleaseTarget, events: ReleaseEvents, pollMs = 1000): Promise<ReleaseStatus> {
+export interface ReleaseOptions {
+  /** Give up waiting for migrations after this long; they keep running on the deployment. */
+  timeoutMs?: number;
+  pollMs?: number;
+}
+
+export async function release(project: Project, target: ReleaseTarget, events: ReleaseEvents, options: ReleaseOptions = {}): Promise<ReleaseStatus> {
   assertConfigured(project);
   writeGenerated(project);
   assertNotDowngrade(project, target.runArgs);
@@ -122,7 +128,7 @@ export async function release(project: Project, target: ReleaseTarget, events: R
   }
 
   events.step('Running migrations');
-  const result = await runMigrations(project, target.runArgs, events.progress, pollMs);
+  const result = await runMigrations(project, target.runArgs, events.progress, options);
   if (result.state !== 'done') return result;
 
   events.step('Pushing with schema validation on');
@@ -130,10 +136,23 @@ export async function release(project: Project, target: ReleaseTarget, events: R
   return result;
 }
 
-export async function runMigrations(project: Project, runArgs: string[], onProgress: (status: ReleaseStatus) => void, pollMs = 1000): Promise<ReleaseStatus> {
+export class MigrationTimeout extends Error {}
+
+export async function runMigrations(
+  project: Project,
+  runArgs: string[],
+  onProgress: (status: ReleaseStatus) => void,
+  { timeoutMs, pollMs = 1000 }: ReleaseOptions = {},
+): Promise<ReleaseStatus> {
   runFunction(project, START, runArgs);
+  const deadline = timeoutMs === undefined ? Infinity : Date.now() + timeoutMs;
   let failedReads = 0;
   for (;;) {
+    if (Date.now() > deadline) {
+      throw new MigrationTimeout(
+        `Migrations are still running after ${Math.round(timeoutMs! / 1000)}s. They keep going on the deployment; run the release again to wait for them and finish it.`,
+      );
+    }
     const status = runFunction<ReleaseStatus>(project, STATUS, runArgs);
     if (status.state === 'failed' && ++failedReads < FAILED_READS) {
       await sleep(pollMs);
