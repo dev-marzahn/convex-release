@@ -36,15 +36,16 @@ The script builds the package and the base images, builds the fixture apps from 
 - Run `bun run ready` before you push. Run `bun run e2e` too if you touched `images/`, `src/image/` or the deploy steps.
 - Add a test for a bug fix or a new option.
 - Add a line under "Unreleased" in [CHANGELOG.md](CHANGELOG.md) for a change users will notice.
-- If you change how a command behaves, update [the package README](packages/convex-release/README.md) in the same pull request.
+- If you change how a command behaves, update [README.md](README.md) in the same pull request. It's the only README: packing the package copies it, and `LICENSE`, into `packages/convex-release`.
 
 ## Backend version
 
-The images pin a Convex backend build in `images/Dockerfile`. To move to a newer one, change `BACKEND_IMAGE`, update the tag in the package README (a unit test checks they match), and run `bun run e2e`.
+The images pin a Convex backend build in `images/Dockerfile`. To move to a newer one, change `BACKEND_IMAGE`, update the tag in README.md (a unit test checks they match), and run `bun run e2e`.
 
 ## Releasing
 
 Maintainers release from `main`:
 
-1. Set `version` in `packages/convex-release/package.json` and the image tags in its README, and move the "Unreleased" changelog entries under the new version.
-2. Push a tag `v<version>`. The [release workflow](.github/workflows/release.yml) checks that the tag matches the package version, runs the checks, publishes the package to npm, and pushes the four images to ghcr.io for amd64 and arm64.
+1. Pick the version by [Epoch SemVer](https://antfu.me/posts/epoch-semver): `{EPOCH * 1000 + MAJOR}.MINOR.PATCH`, bumping the first number for any breaking change.
+2. Set `version` in `packages/convex-release/package.json` and the image tags in README.md, and move the "Unreleased" changelog entries under the new version.
+3. Push a tag `v<version>`. The [release workflow](.github/workflows/release.yml) checks that the tag matches the package version, runs the checks, pushes the four images to ghcr.io for amd64 and arm64, then publishes the package to npm.

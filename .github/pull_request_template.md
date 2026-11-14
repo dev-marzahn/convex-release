@@ -7,4 +7,4 @@
 - [ ] `bun run ready` passes
 - [ ] `bun run e2e` passes, if this touches `images/`, `src/image/` or the deploy steps
 - [ ] Tests cover the change
-- [ ] The package README and CHANGELOG.md are updated, if users will notice
+- [ ] README.md and CHANGELOG.md are updated, if users will notice

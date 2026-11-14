@@ -1,6 +1,6 @@
 # Changelog
 
-This project follows [Semantic Versioning](https://semver.org). Before 1.0, a minor version can break things.
+This project follows [Epoch Semantic Versioning](https://antfu.me/posts/epoch-semver): versions are `{EPOCH * 1000 + MAJOR}.MINOR.PATCH`. A change to the first number can break your app; minor and patch releases don't.
 
 ## Unreleased
 

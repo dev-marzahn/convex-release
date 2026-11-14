@@ -1,6 +1,6 @@
 {
   "name": "@dev-marzahn/convex-release",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Versioned data migrations, seeding and self-hosted Docker images for Convex apps.",
   "keywords": [
     "cli",
@@ -45,6 +45,7 @@
     "build": "vp pack",
     "dev": "vp pack --watch",
     "test": "vp test",
+    "prepack": "node -e \"for (const f of ['README.md', 'LICENSE']) require('fs').copyFileSync('../../' + f, f)\"",
     "prepublishOnly": "vp run build"
   },
   "dependencies": {
