@@ -15,7 +15,11 @@ export default defineConfig({
   lint: {
     ignorePatterns: generated,
     jsPlugins: [{ name: 'vite-plus', specifier: 'vite-plus/oxlint-plugin' }],
-    rules: { 'vite-plus/prefer-vite-plus-imports': 'error' },
+    rules: {
+      'vite-plus/prefer-vite-plus-imports': 'error',
+      // Class members say `public`, `private` or `protected` explicitly.
+      'typescript/explicit-member-accessibility': ['error', { accessibility: 'explicit' }],
+    },
     options: { typeAware: true, typeCheck: true },
   },
   run: {
