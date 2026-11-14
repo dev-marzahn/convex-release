@@ -23,6 +23,11 @@ describe('detectPackageManager', () => {
     expect(detectPackageManager(dir({ 'package-lock.json': '' }), 'bun/1.4.4')).toBe('npm');
   });
 
+  test('with two lockfiles, the one the image build would use', () => {
+    expect(detectPackageManager(dir({ 'bun.lock': '', 'package-lock.json': '' }))).toBe('npm');
+    expect(detectPackageManager(dir({ 'bun.lock': '', 'yarn.lock': '' }))).toBe('yarn');
+  });
+
   test('without a lockfile, the package manager running the command', () => {
     expect(detectPackageManager(dir(), 'bun/1.4.4 npm/? node/v26')).toBe('bun');
     expect(detectPackageManager(dir(), '')).toBe('npm');

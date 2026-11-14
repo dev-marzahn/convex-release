@@ -11,6 +11,14 @@ test('the deploy workflow verifies pull requests and deploys pushes', () => {
   expect(yaml).not.toContain('working-directory');
 });
 
+test('with images deploying, the workflow only verifies pull requests', () => {
+  const yaml = deployWorkflow({ tools: toolchain('bun'), branch: 'main', dir: '' }, 'image');
+  expect(yaml).toContain('run: bunx convex-release verify');
+  expect(yaml).not.toContain('convex-release deploy');
+  expect(yaml).not.toContain('push:');
+  expect(yaml).not.toContain('CONVEX_DEPLOY_KEY');
+});
+
 test('a project in a subfolder runs its steps there', () => {
   const yaml = deployWorkflow({ tools: toolchain('npm'), branch: 'main', dir: 'apps/backend' });
   expect(yaml).toContain('working-directory: apps/backend');

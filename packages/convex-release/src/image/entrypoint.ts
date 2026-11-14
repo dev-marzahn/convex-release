@@ -119,22 +119,22 @@ async function runMigrations(url: string, key: string) {
   }
 }
 
-/** The migrations the deployment has recorded, straight from the component. */
+/**
+ * The migrations the deployment has recorded, straight from the component.
+ * None when the component isn't deployed yet; any other failure throws, so a
+ * broken read never lets an older version through.
+ */
 async function recordedMigrations(url: string, key: string): Promise<{ name: string; isDone: boolean }[]> {
-  try {
-    const r = await post<{ status: string; value: { name: string; isDone: boolean }[] }>(
-      url,
-      '/api/function',
-      { componentPath: 'migrations', path: 'lib:getStatus', format: 'json', args: { limit: 1000 } },
-      key,
-    );
-    return r.status === 'success' ? r.value : [];
-  } catch {
-    // No migrations component yet (the backend answers 500): a fresh
-    // deployment, or one never released with convex-release. A real outage
-    // fails the push that follows, and `status` checks again after pass 1.
-    return [];
-  }
+  const components = await call<{ path: string }[]>(url, key, '_system/frontend/components:list', {}, '/api/query');
+  if (!components.some((c) => c.path === 'migrations')) return [];
+  const r = await post<{ status: string; value: { name: string; isDone: boolean }[]; errorMessage?: string }>(
+    url,
+    '/api/function',
+    { componentPath: 'migrations', path: 'lib:getStatus', format: 'json', args: { limit: 1000 } },
+    key,
+  );
+  if (r.status !== 'success') throw new Error(`reading the recorded migrations failed: ${r.errorMessage}`);
+  return r.value;
 }
 
 function readManifest(): Manifest | undefined {

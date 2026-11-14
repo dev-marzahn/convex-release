@@ -8,7 +8,7 @@ import { Command } from 'commander';
 import pkg from '../package.json' with { type: 'json' };
 import { bundle } from './bundle.ts';
 import { check } from './check.ts';
-import { writeWorkflows } from './ci.ts';
+import { writeWorkflows, type DeployWith } from './ci.ts';
 import { listSeeds, writeGenerated } from './codegen.ts';
 import { runInteractive } from './convex-cli.ts';
 import { build, testUpgrade } from './docker.ts';
@@ -62,9 +62,10 @@ program
   .option('--docker', 'also write Dockerfile, .dockerignore and compose.yaml')
   .option('--no-docker', "don't ask about Docker files")
   .option('--no-install', "don't install missing packages")
-  .option('--ci', 'also write GitHub Actions workflows (verify on pull requests, deploy on push, image on tags)')
+  .option('--ci', 'also write GitHub Actions workflows (verify on pull requests, and deploy on push or an image on tags)')
   .option('--no-ci', "don't ask about workflows")
-  .action(async (options: { docker?: boolean; install: boolean; ci?: boolean }) => {
+  .option('--deploy-with <how>', 'for --ci: `image` (images deploy; needs a Dockerfile) or `cli` (`convex-release deploy` on push)')
+  .action(async (options: { docker?: boolean; install: boolean; ci?: boolean; deployWith?: string }) => {
     const project = findProject();
     p.intro('convex-release init');
     if (!existsSync(join(project.root, 'package.json'))) throw new Error('No package.json here. Run this in your Convex project.');
@@ -109,9 +110,10 @@ program
       ci = !p.isCancel(answer) && answer;
     }
     if (ci) {
-      const withImage = existsSync(join(project.root, 'Dockerfile'));
-      const written = writeWorkflows(project, detectPackageManager(project.root), withImage);
-      if (written.length > 0) p.log.success(`Wrote ${written.join(', ')}. Add the CONVEX_DEPLOY_KEY secret (or the self-hosted ones) before the first deploy.`);
+      const deployWith = await chooseDeployWith(existsSync(join(project.root, 'Dockerfile')), options.deployWith);
+      const written = writeWorkflows(project, pm, deployWith);
+      const secrets = deployWith === 'cli' ? ' Add the CONVEX_DEPLOY_KEY secret (or the self-hosted ones) before the first deploy.' : '';
+      if (written.length > 0) p.log.success(`Wrote ${written.join(', ')}.${secrets}`);
       else p.log.info('The workflows already exist; left them as they are.');
     }
 
@@ -356,6 +358,31 @@ function summarize(project: Project, target: ReleaseTarget, title: string) {
   } catch {
     jobSummary(`### ${title}\n`);
   }
+}
+
+/**
+ * Images or `convex-release deploy`, never both: each would push its own
+ * version. Without a Dockerfile only `cli` is possible; outside a terminal a
+ * Dockerfile means images.
+ */
+async function chooseDeployWith(hasDockerfile: boolean, flag: string | undefined): Promise<DeployWith> {
+  if (flag !== undefined && flag !== 'image' && flag !== 'cli') throw new Error(`--deploy-with takes \`image\` or \`cli\`, not \`${flag}\`.`);
+  if (flag === 'image' && !hasDockerfile) throw new Error('--deploy-with image needs a Dockerfile. Add `--docker`, or use `--deploy-with cli`.');
+  if (flag) return flag;
+  if (!hasDockerfile) return 'cli';
+  if (!interactive) return 'image';
+  const answer = await p.select({
+    message: 'How does this app deploy?',
+    options: [
+      { value: 'image' as const, label: 'Images', hint: 'tags build and push an image; it deploys when it starts' },
+      { value: 'cli' as const, label: 'convex-release deploy', hint: 'pushes to your default branch deploy' },
+    ],
+  });
+  if (p.isCancel(answer)) {
+    p.cancel('Cancelled.');
+    process.exit(1);
+  }
+  return answer;
 }
 
 function seedSummary(result: SeedResult): string {

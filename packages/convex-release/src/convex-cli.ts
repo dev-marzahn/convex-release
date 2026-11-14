@@ -9,6 +9,9 @@ import type { Project } from './project.ts';
 
 export class ConvexCliError extends Error {}
 
+/** The function isn't deployed on that deployment. */
+export class FunctionNotFound extends ConvexCliError {}
+
 /** The project's installed `convex` CLI. */
 export function convexBin(project: Project): string {
   try {
@@ -54,7 +57,7 @@ export function runFunction<T>(project: Project, fn: string, convexArgs: string[
   if (result.status !== 0) {
     const out = `${result.stderr}\n${result.stdout}`;
     if (/Could not find function|is not a function|Could not find public function/i.test(out)) {
-      throw new ConvexCliError(`${fn} isn't deployed yet. Push your code first (\`npx convex dev\`), then run this again.`);
+      throw new FunctionNotFound(`${fn} isn't deployed yet. Push your code first (\`npx convex dev\`), then run this again.`);
     }
     throw new ConvexCliError(out.trim() || `convex run ${fn} failed`);
   }

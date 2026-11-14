@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { writeGenerated } from './codegen.ts';
-import { push, runFunction, type PushTarget } from './convex-cli.ts';
+import { FunctionNotFound, push, runFunction, type PushTarget } from './convex-cli.ts';
 import type { ReleaseStatus } from './index.ts';
 import type { Project } from './project.ts';
 import { copyProject } from './relaxed.ts';
@@ -80,8 +80,12 @@ function assertNotDowngrade(project: Project, runArgs: string[]) {
   let rows: MigrationRow[];
   try {
     rows = readStatus(project, runArgs);
-  } catch {
-    // No migrations component deployed yet: nothing can be newer.
+  } catch (err) {
+    // A missing component gives the same generic server error as a real
+    // failure. convex-release deploys its status function with the
+    // component, so if that isn't there either, nothing can be newer. Any
+    // other failure (auth, network) stops the deploy.
+    if (!neverDeployed(project, runArgs)) throw err;
     return;
   }
   const newer = rows.filter((r) => r.unknown && r.state === 'done').map((r) => r.name);
@@ -89,6 +93,16 @@ function assertNotDowngrade(project: Project, runArgs: string[]) {
     throw new Error(
       `The deployment has migrations this checkout doesn't (${newer.join(', ')}): a newer version of the app ran them. Update your checkout; nothing was pushed.`,
     );
+  }
+}
+
+function neverDeployed(project: Project, runArgs: string[]): boolean {
+  try {
+    runFunction(project, STATUS, runArgs);
+    return false;
+  } catch (err) {
+    if (err instanceof FunctionNotFound) return true;
+    throw err;
   }
 }
 

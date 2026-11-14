@@ -10,12 +10,16 @@ const PACKAGES = ['@dev-marzahn/convex-release', '@convex-dev/migrations'];
 
 export type PackageManager = 'bun' | 'pnpm' | 'yarn' | 'npm';
 
-/** The lockfile's package manager, else the one running this command. */
+/**
+ * The lockfile's package manager, else the one running this command. Checks
+ * lockfiles in the image build's order (images/onbuild.sh), so CI and the
+ * image agree when a project has more than one.
+ */
 export function detectPackageManager(root: string, userAgent = process.env.npm_config_user_agent ?? ''): PackageManager {
-  if (existsSync(join(root, 'bun.lock')) || existsSync(join(root, 'bun.lockb'))) return 'bun';
+  if (existsSync(join(root, 'package-lock.json'))) return 'npm';
   if (existsSync(join(root, 'pnpm-lock.yaml'))) return 'pnpm';
   if (existsSync(join(root, 'yarn.lock'))) return 'yarn';
-  if (existsSync(join(root, 'package-lock.json'))) return 'npm';
+  if (existsSync(join(root, 'bun.lock')) || existsSync(join(root, 'bun.lockb'))) return 'bun';
   for (const pm of ['bun', 'pnpm', 'yarn'] as const) if (userAgent.startsWith(pm)) return pm;
   return 'npm';
 }
