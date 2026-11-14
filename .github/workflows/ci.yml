@@ -18,6 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # verify compares the example's migrations with the base branch.
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -26,6 +29,10 @@ jobs:
           node-version: 24
       - run: bun install --frozen-lockfile
       - run: bun run ready
+      - name: Verify the example's migrations against the base branch
+        if: github.event_name == 'pull_request'
+        working-directory: examples/basic
+        run: bunx convex-release verify
 
   e2e:
     name: End-to-end upgrades

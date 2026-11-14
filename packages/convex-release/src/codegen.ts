@@ -8,7 +8,7 @@ import type { Project } from './project.ts';
 export const GENERATED_FILE = '_generated.ts';
 
 /** `0001_rename_body.ts`: a number, an underscore, a name. */
-const MIGRATION_FILE = /^(\d+)_([a-z0-9_]+)\.(ts|js)$/;
+export const MIGRATION_FILE = /^(\d+)_([a-z0-9_]+)\.(ts|js)$/;
 
 export interface MigrationFile {
   /** The number prefix, e.g. 1 for `0001_rename_body.ts`. */

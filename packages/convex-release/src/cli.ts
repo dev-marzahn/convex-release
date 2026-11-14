@@ -18,6 +18,7 @@ import { findProject, type Project } from './project.ts';
 import { checkTarget, deployTarget, devTarget, MigrationTimeout, release, type ReleaseTarget } from './release.ts';
 import { readStatus } from './status.ts';
 import { interactive, jobSummary, migrationsMarkdown, progress, requireAnswer } from './ui.ts';
+import { defaultBase, repoPath, verify } from './verify.ts';
 
 const program = new Command('convex-release').description('Data migrations and self-hosted Docker releases for Convex apps.').version(pkg.version);
 
@@ -155,6 +156,29 @@ program
       process.exit(1);
     }
     p.log.warn(`Pending migrations run before the strict push: ${result.pending.map(label).join(', ')}. If they change ${where}, the release will pass.`);
+  });
+
+program
+  .command('verify')
+  .description('Compare the migrations with a base branch: shipped ones must stay, keep their numbers, and come before new ones. Needs no deployment.')
+  .option('--base <ref>', 'the git ref to compare with (default: the pull request target, else origin/main)')
+  .option('--json', 'print the issues as JSON')
+  .addHelpText('after', '\nExit code 1 on errors; warnings (an edited shipped migration) keep it 0.')
+  .action((options: { base?: string; json?: boolean }) => {
+    const project = findProject();
+    const base = options.base ?? defaultBase();
+    const issues = verify(project, base);
+    const errors = issues.filter((i) => i.level === 'error');
+    if (options.json) {
+      console.log(JSON.stringify({ base, issues }, null, 2));
+    } else {
+      if (process.env.GITHUB_ACTIONS) {
+        for (const i of issues) console.log(`::${i.level} file=${repoPath(project, i.migration)},title=convex-release verify::${i.migration} ${i.message}`);
+      }
+      for (const i of issues) (i.level === 'error' ? p.log.error : p.log.warn)(`${i.migration} ${i.message}`);
+      if (issues.length === 0) p.log.success(`Migrations are consistent with ${base}.`);
+    }
+    if (errors.length > 0) process.exit(1);
   });
 
 program
