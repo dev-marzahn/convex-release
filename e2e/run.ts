@@ -425,6 +425,19 @@ const scenarios: Record<string, () => Promise<void>> = {
       summary = await check();
       expect(summary.wellFormed === 300 && summary.users === 15, `snapshot data: ${JSON.stringify(summary)}`);
       log(`  snapshot: imported and migrated, ${JSON.stringify(summary)}`);
+
+      // A v4 export is newer than v3: the start fails and leaves the volume
+      // empty, so pointing it at an older snapshot fixes it.
+      const newer = join(dir, 'newer.zip');
+      sh(join(ROOT, 'e2e/apps/v4/node_modules/.bin/convex'), ['export', '--path', newer], {
+        cwd: join(ROOT, 'e2e/apps/v4'),
+        env: { ...process.env, CONVEX_SELF_HOSTED_URL: URL, CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey(), CONVEX_DEPLOYMENT: '' },
+      });
+      const tooNew = await runCombined('v3', 'pr3', ['-v', `${newer}:/snapshot.zip:ro`, '-e', 'CONVEX_RELEASE_SNAPSHOT=/snapshot.zip']);
+      expect(!tooNew.healthy && has(tooNew, 'comes from a newer version'), `a newer snapshot should fail:\n${tooNew.log.join('\n')}`);
+      const replaced = await runCombined('v3', 'pr3', ['-v', `${zip}:/snapshot.zip:ro`, '-e', 'CONVEX_RELEASE_SNAPSHOT=/snapshot.zip']);
+      expect(replaced.healthy && has(replaced, 'imported snapshot.zip'), `replacing the snapshot didn't help:\n${replaced.log.join('\n')}`);
+      log('  newer snapshot: start fails; replacing it works');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

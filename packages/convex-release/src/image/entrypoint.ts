@@ -145,9 +145,9 @@ function readManifest(): Manifest | undefined {
  * Refuses an older release before anything is pushed: if the data has
  * finished migrations this release doesn't know, a newer one shipped them.
  * With CONVEX_RELEASE_ON_DOWNGRADE=reset, any unknown migration (a preview
- * whose branch renamed or dropped one) wipes the data instead. Not after a
- * snapshot import: a snapshot newer than the release would be imported and
- * wiped again on every start.
+ * whose branch renamed or dropped one) wipes the data instead. After a
+ * snapshot import, a newer snapshot is deleted again before the error, so the
+ * next start imports whatever CONVEX_RELEASE_SNAPSHOT points to by then.
  */
 async function checkDowngrade(url: string, key: string, after: 'start' | 'snapshot' = 'start') {
   const manifest = readManifest();
@@ -165,6 +165,7 @@ async function checkDowngrade(url: string, key: string, after: 'start' | 'snapsh
     .join(', ');
   if (!newer) return;
   if (after === 'snapshot') {
+    await importZip(url, key, emptyZip(), 'an empty snapshot');
     throw new Error(
       `CONVEX_RELEASE_SNAPSHOT comes from a newer version of the app (migrations not in this one: ${newer}). Export it from this version or an older one.`,
     );
