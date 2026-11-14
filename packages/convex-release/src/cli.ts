@@ -7,6 +7,7 @@ import { Command } from 'commander';
 
 import pkg from '../package.json' with { type: 'json' };
 import { bundle } from './bundle.ts';
+import { check } from './check.ts';
 import { writeGenerated } from './codegen.ts';
 import { runInteractive } from './convex-cli.ts';
 import { build, testUpgrade } from './docker.ts';
@@ -14,7 +15,7 @@ import { appImageName } from './images.ts';
 import { detectPackageManager, ensureConvexConfig, installPackages, missingPackages, writeDockerFiles } from './init.ts';
 import { createMigration } from './new.ts';
 import { findProject, type Project } from './project.ts';
-import { deployTarget, devTarget, release, type ReleaseTarget } from './release.ts';
+import { checkTarget, deployTarget, devTarget, release, type ReleaseTarget } from './release.ts';
 import { readStatus } from './status.ts';
 
 const program = new Command('convex-release').description('Data migrations and self-hosted Docker releases for Convex apps.').version(pkg.version);
@@ -111,6 +112,32 @@ program
       return `${icon[r.state]} ${label(r.name).padEnd(width)}  ${r.state.padEnd(8)} ${String(r.processed).padStart(7)} docs${detail}`;
     });
     p.note(lines.join('\n'), 'Migrations');
+  });
+
+program
+  .command('check')
+  .description("Check whether this checkout's schema accepts the deployment's data, without changing anything (dev by default).")
+  .option('--prod', "the project's production deployment")
+  .option('--deployment <name>', 'a specific deployment')
+  .action((options: { prod?: boolean; deployment?: string }) => {
+    const project = findProject();
+    const spinner = p.spinner();
+    spinner.start('Validating the schema against the data (dry run)');
+    const result = check(project, checkTarget(project, options));
+    const label = (name: string) => name.replace(/^migrations\//, '');
+    if (result.matches) {
+      spinner.stop('The schema accepts the data as it is.');
+      if (result.pending.length > 0) p.log.info(`Pending migrations still run on release: ${result.pending.map(label).join(', ')}`);
+      return;
+    }
+    const where = result.mismatch?.table ? `\`${result.mismatch.table}\`` : 'a table';
+    spinner.error(`Documents in ${where} don't match the schema: ${result.mismatch?.message}`);
+    if (result.pending.length > 0) {
+      p.log.warn(`Pending migrations run before the strict push: ${result.pending.map(label).join(', ')}. If they change ${where}, the release will pass.`);
+    } else {
+      p.log.warn(`No migration is pending. Write one: convex-release new "what it changes" --table ${result.mismatch?.table ?? '<table>'}`);
+      process.exit(1);
+    }
   });
 
 program

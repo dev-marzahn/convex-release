@@ -42,6 +42,19 @@ export function deployTarget(project: Project, deployment?: string): ReleaseTarg
   return { push: { kind: 'deploy', args: [] }, runArgs: fromEnv ? [] : ['--prod'] };
 }
 
+/**
+ * Where `check` dry-runs. `convex dev` has no `--dry-run`, so the dev
+ * deployment is named for `convex deploy`, except self-hosted, which has one.
+ */
+export function checkTarget(project: Project, options: { prod?: boolean; deployment?: string }): { deployArgs: string[]; runArgs: string[] } {
+  if (options.deployment || options.prod) {
+    const target = deployTarget(project, options.deployment);
+    return { deployArgs: target.push.kind === 'deploy' ? target.push.args : [], runArgs: target.runArgs };
+  }
+  const selfHosted = Boolean(projectEnv(project).CONVEX_SELF_HOSTED_URL);
+  return { deployArgs: selfHosted ? [] : ['--deployment', 'dev'], runArgs: [] };
+}
+
 /** The variables the `convex` CLI reads: `.env`, then `.env.local`, then the shell. Empty counts as unset. */
 function projectEnv(project: Project): Record<string, string | undefined> {
   const shell = Object.fromEntries(Object.entries(process.env).filter(([, value]) => value));
