@@ -20,6 +20,9 @@ import {
 } from 'convex/server';
 import type { GenericId } from 'convex/values';
 
+// For libraries that ship a predeploy check module.
+export { COMPONENT_NOT_DEPLOYED, type PredeployCheckContext, type PredeployCollectContext, type PredeployResult } from './predeploy-contract.ts';
+
 /**
  * A document as a migration sees it. It may be in any older shape: fields of
  * the current schema can be missing, and fields the schema no longer has can

@@ -10,8 +10,24 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { writeGenerated } from './codegen.ts';
-import { FunctionNotFound, push, runFunction, type PushTarget } from './convex-cli.ts';
+import { ConvexCliError, FunctionNotFound, push, runFunction, runFunctionAsync, type PushTarget } from './convex-cli.ts';
 import type { ReleaseStatus } from './index.ts';
+import {
+  applySkips,
+  classifyCliFailure,
+  collectAll,
+  COMPONENT_NOT_DEPLOYED,
+  discoverChecks,
+  QueryError,
+  refusal,
+  runChecks,
+  type CheckOutcome,
+  type DeclaredCheck,
+  type HostOptions,
+  type Log,
+  type PredeployTransport,
+  type Warn,
+} from './predeploy.ts';
 import type { Project } from './project.ts';
 import { copyProject } from './relaxed.ts';
 import type { SeedResult } from './seed.ts';
@@ -117,21 +133,89 @@ function readEnvFile(project: Project, name: string): Record<string, string> {
   return vars;
 }
 
+/**
+ * Predeploy check queries through the project's `convex run`. Doesn't enforce
+ * read-only: `convex run` runs any function type, and can't call the system
+ * functions that would tell. A failed component call is classified from the
+ * CLI's output, as recorded against the pinned backend.
+ */
+export function cliTransport(project: Project, runArgs: string[]): PredeployTransport {
+  const notDeployed = (componentPath: string) => new QueryError(`${componentPath} isn't deployed`, COMPONENT_NOT_DEPLOYED);
+  return {
+    async query(target, args) {
+      try {
+        return await runFunctionAsync(project, target.path, runArgs, args, target.componentPath);
+      } catch (err) {
+        if (!(err instanceof ConvexCliError)) throw err;
+        const { componentPath } = target;
+        const kind = classifyCliFailure(err.output);
+        if (componentPath !== undefined && kind === 'unmounted') throw notDeployed(componentPath);
+        if (componentPath !== undefined && kind === 'maybe-missing') {
+          // A never-deployed component and a backend fault look the same. A
+          // function every convex-release deployment has tells them apart; on
+          // an app never deployed at all, no component can exist either.
+          try {
+            await runFunctionAsync(project, STATUS, runArgs);
+          } catch (probe) {
+            if (!(probe instanceof FunctionNotFound)) throw new QueryError(err.message);
+          }
+          throw notDeployed(componentPath);
+        }
+        if (kind === 'function-not-found') throw new QueryError(`${componentPath === undefined ? '' : `${componentPath}/`}${target.path} isn't deployed`);
+        throw new QueryError(err.message);
+      }
+    },
+  };
+}
+
+/** Collects and runs `checks` (already filtered by skips) against the deployment `runArgs` choose. */
+export async function predeployChecks(project: Project, runArgs: string[], checks: DeclaredCheck[], options: HostOptions): Promise<CheckOutcome[]> {
+  const { collected, failed } = await collectAll(checks, { projectRoot: project.root, convexDir: project.functionsDir }, options);
+  const outcomes = await runChecks(collected, cliTransport(project, runArgs), options);
+  return [...failed, ...outcomes].sort((a, b) => (a.packageName < b.packageName ? -1 : a.packageName > b.packageName ? 1 : 0));
+}
+
+/**
+ * Refuses before anything is pushed when a dependency's predeploy check
+ * fails. Skip warnings print before any step starts, so they don't land in
+ * the middle of a spinner.
+ */
+async function assertPredeployChecks(project: Project, runArgs: string[], events: ReleaseEvents, skipChecks: string[]) {
+  const declared = discoverChecks(project.root);
+  const { run, skipped, warnings } = applySkips(
+    declared.map((c) => c.packageName),
+    skipChecks,
+    '--skip-check',
+  );
+  for (const line of [...skipped.map((o) => o.message!), ...warnings]) events.warn(line);
+  const toRun = declared.filter((c) => run.has(c.packageName));
+  if (toRun.length === 0) return;
+  events.step('Running predeploy checks');
+  const refused = refusal(await predeployChecks(project, runArgs, toRun, { log: events.log }), '--skip-check <package>');
+  if (refused) throw new Error(refused);
+}
+
 export interface ReleaseEvents {
   step: (message: string) => void;
   progress: (status: ReleaseStatus) => void;
+  /** A line a predeploy check module printed. */
+  log: Log;
+  warn: Warn;
 }
 
 export interface ReleaseOptions {
   /** Give up waiting for migrations after this long; they keep running on the deployment. */
   timeoutMs?: number;
   pollMs?: number;
+  /** Package names whose predeploy checks don't run. */
+  skipChecks?: string[];
 }
 
 export async function release(project: Project, target: ReleaseTarget, events: ReleaseEvents, options: ReleaseOptions = {}): Promise<ReleaseStatus> {
   assertConfigured(project);
   writeGenerated(project);
   assertNotDowngrade(project, target.runArgs);
+  await assertPredeployChecks(project, target.runArgs, events, options.skipChecks ?? []);
 
   events.step('Pushing with schema validation off');
   const copy = copyProject(project);

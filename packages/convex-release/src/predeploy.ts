@@ -14,35 +14,15 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { COMPONENT_NOT_DEPLOYED, type PredeployCollectContext } from './predeploy-contract.ts';
+
+export { COMPONENT_NOT_DEPLOYED, type PredeployCheckContext, type PredeployCollectContext, type PredeployResult } from './predeploy-contract.ts';
+
 /** The version of the interface convex-release gives a check module. */
 export const PROTOCOL = 1;
 /** Each phase of each check gets this long before its runner is killed. */
 export const CHECK_TIMEOUT_MS = 600_000;
 export const RUNNER_FILE = 'predeploy-runner.mjs';
-/** The `code` of a query error whose target component is missing or unmounted on the deployment. */
-export const COMPONENT_NOT_DEPLOYED = 'COMPONENT_NOT_DEPLOYED';
-
-/** What `collect` receives: where the app's source is. */
-export interface PredeployCollectContext {
-  projectRoot: string;
-  /** The app's functions folder. */
-  convexDir: string;
-}
-
-/** What `check` receives. */
-export interface PredeployCheckContext {
-  /** What `collect` returned for the release being deployed. */
-  facts: unknown;
-  /**
-   * Calls a query on the deployment. Rejects with `code: 'COMPONENT_NOT_DEPLOYED'`
-   * when the target component is missing or unmounted, and with a plain error
-   * for any other failure.
-   */
-  query<T>(target: { componentPath?: string; path: string }, args?: object): Promise<T>;
-  log(message: string): void;
-}
-
-export type PredeployResult = { ok: true } | { ok: false; message: string; details?: string[] };
 
 /** A failed query. `code` is set only when the target component isn't deployed. */
 export class QueryError extends Error {
