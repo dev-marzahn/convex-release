@@ -4,11 +4,14 @@ This project follows [Epoch Semantic Versioning](https://antfu.me/posts/epoch-se
 
 ## Unreleased
 
-## 100.1.0-next.0 (2026-11-15)
-
-A prerelease, on npm's `next` dist-tag, for libraries to try the predeploy check contract before 100.1.0.
+## 100.1.0 (2026-11-15)
 
 - Predeploy checks: a dependency can declare `convex-release.predeploy` in its `package.json`. `deploy`, both images and the first push of `dev` run that check before anything is pushed, and a failed check refuses the release. `check` reports the checks. `--skip-check` and `CONVEX_RELEASE_SKIP_CHECKS` skip a named check. Library authors can import the check types from `@dev-marzahn/convex-release`.
+- Releases with a prerelease version publish to npm's `next` dist-tag and don't move the images' `latest` and `runtime` tags.
+
+## 100.1.0-next.0 (2026-11-15)
+
+A prerelease of 100.1.0 on npm's `next` dist-tag, for libraries to try the predeploy check contract.
 
 ## 100.0.1 (2026-11-14)
 
