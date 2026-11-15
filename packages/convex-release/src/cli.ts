@@ -7,7 +7,7 @@ import { Command } from 'commander';
 
 import pkg from '../package.json' with { type: 'json' };
 import { bundle } from './bundle.ts';
-import { check } from './check.ts';
+import { check, type CheckResult } from './check.ts';
 import { writeWorkflows, type DeployWith } from './ci.ts';
 import { listSeeds, writeGenerated } from './codegen.ts';
 import { runInteractive } from './convex-cli.ts';
@@ -25,6 +25,8 @@ import { defaultBase, repoPath, verify } from './verify.ts';
 const program = new Command('convex-release').description('Data migrations and self-hosted Docker releases for Convex apps.').version(pkg.version);
 
 const label = (name: string) => name.replace(/^migrations\//, '');
+const SKIP_CHECK_HELP = "skip this dependency's predeploy check (repeatable); only after you've confirmed the release is safe";
+const collect = (value: string, previous: string[]) => [...previous, value];
 function seconds(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
   const n = Number(value);
@@ -37,11 +39,12 @@ program
   .description('Deploy to your dev deployment (code, then pending migrations), then keep watching like `convex dev`.')
   .option('--once', 'deploy once and exit instead of watching')
   .option('--timeout <seconds>', 'stop waiting for migrations after this long')
+  .option('--skip-check <package>', SKIP_CHECK_HELP, collect, [])
   .allowUnknownOption()
   .argument('[convexDevArgs...]', 'passed on to `convex dev`')
-  .action(async (convexDevArgs: string[], options: { once?: boolean; timeout?: string }) => {
+  .action(async (convexDevArgs: string[], options: { once?: boolean; timeout?: string; skipCheck: string[] }) => {
     const project = findProject();
-    await runRelease(project, devTarget, seconds(options.timeout));
+    await runRelease(project, devTarget, seconds(options.timeout), options.skipCheck);
     if (listSeeds(project.seedsDir).length > 0) {
       const result = runSeeds(project, devTarget.runArgs);
       if (result.seeded) p.log.success(`Seeded the empty deployment: ${seedSummary(result)}`);
@@ -56,9 +59,10 @@ program
   .description('Deploy code and pending migrations to the deployment `convex deploy` targets: prod, a deploy key, or a self-hosted URL.')
   .option('--deployment <name>', 'a specific deployment, as `convex deploy` takes it')
   .option('--timeout <seconds>', 'stop waiting for migrations after this long; they keep running on the deployment')
-  .action(async (options: { deployment?: string; timeout?: string }) => {
+  .option('--skip-check <package>', SKIP_CHECK_HELP, collect, [])
+  .action(async (options: { deployment?: string; timeout?: string; skipCheck: string[] }) => {
     const project = findProject();
-    await runRelease(project, deployTarget(project, options.deployment), seconds(options.timeout));
+    await runRelease(project, deployTarget(project, options.deployment), seconds(options.timeout), options.skipCheck);
   });
 
 program
@@ -160,30 +164,35 @@ program
   .option('--prod', "the project's production deployment")
   .option('--deployment <name>', 'a specific deployment')
   .option('--json', 'print the result as JSON')
-  .addHelpText('after', "\nExit code 1 when the data doesn't match and no pending migration could change that; 0 otherwise.")
-  .action((options: { prod?: boolean; deployment?: string; json?: boolean }) => {
+  .option('--skip-check <package>', SKIP_CHECK_HELP, collect, [])
+  .addHelpText('after', "\nExit code 1 when the data doesn't match and no pending migration could change that, or when a predeploy check fails; 0 otherwise.")
+  .action(async (options: { prod?: boolean; deployment?: string; json?: boolean; skipCheck: string[] }) => {
     const project = findProject();
     const ui = options.json ? undefined : progress();
     ui?.step('Validating the schema against the data (dry run)');
-    const result = check(project, checkTarget(project, options));
+    const log = options.json ? (pkg: string, line: string) => console.error(`[${pkg}] ${line}`) : (pkg: string, line: string) => ui?.update(`[${pkg}] ${line}`);
+    const result = await check(project, checkTarget(project, options), { skipChecks: options.skipCheck, log });
     const needsMigration = !result.matches && result.pending.length === 0;
+    const checkFailed = result.predeploy.some((o) => o.state === 'failed');
     if (options.json) {
       console.log(JSON.stringify({ ...result, needsMigration }, null, 2));
-      if (needsMigration) process.exit(1);
+      if (needsMigration || checkFailed) process.exit(1);
       return;
     }
     if (result.matches) {
       ui?.done('The schema accepts the data as it is.');
       if (result.pending.length > 0) p.log.info(`Pending migrations still run on deploy:${result.pending.map(label).join(', ')}`);
-      return;
+    } else {
+      const where = result.mismatch?.table ? `\`${result.mismatch.table}\`` : 'a table';
+      ui?.fail(`Documents in ${where} don't match the schema: ${result.mismatch?.message}`);
+      if (needsMigration) {
+        p.log.warn(`No migration is pending. Write one: convex-release new "what it changes" --table ${result.mismatch?.table ?? '<table>'}`);
+      } else {
+        p.log.warn(`Pending migrations run before the strict push: ${result.pending.map(label).join(', ')}. If they change ${where}, the deploy will pass.`);
+      }
     }
-    const where = result.mismatch?.table ? `\`${result.mismatch.table}\`` : 'a table';
-    ui?.fail(`Documents in ${where} don't match the schema: ${result.mismatch?.message}`);
-    if (needsMigration) {
-      p.log.warn(`No migration is pending. Write one: convex-release new "what it changes" --table ${result.mismatch?.table ?? '<table>'}`);
-      process.exit(1);
-    }
-    p.log.warn(`Pending migrations run before the strict push: ${result.pending.map(label).join(', ')}. If they change ${where}, the deploy will pass.`);
+    printPredeploy(result);
+    if (needsMigration || checkFailed) process.exit(1);
   });
 
 program
@@ -262,11 +271,12 @@ program
   .command('bundle')
   .description('Write the push requests an image applies (run by the image build).')
   .argument('[outDir]', 'where to write push.json and push.relaxed.json', '.convex-release')
-  .action((outDir: string) => {
+  .action(async (outDir: string) => {
     const project = findProject();
-    const result = bundle(project, resolve(outDir));
+    const result = await bundle(project, resolve(outDir));
+    const checks = result.checks > 0 ? `, and ${result.checks} predeploy check${result.checks === 1 ? '' : 's'}` : '';
     p.log.success(
-      `Bundled ${result.modules} modules${result.relaxed ? ` and ${result.migrations} migration${result.migrations === 1 ? '' : 's'} (two passes)` : ' (no migrations: one pass)'}`,
+      `Bundled ${result.modules} modules${result.relaxed ? ` and ${result.migrations} migration${result.migrations === 1 ? '' : 's'} (two passes)` : ' (no migrations: one pass)'}${checks}`,
     );
   });
 
@@ -335,11 +345,32 @@ program
     );
   });
 
-async function runRelease(project: Project, target: ReleaseTarget, timeoutMs?: number) {
+/** The predeploy outcomes of `check`, after its spinner has stopped. */
+function printPredeploy(result: CheckResult) {
+  for (const warning of result.warnings) p.log.warn(warning);
+  for (const outcome of result.predeploy) {
+    if (outcome.state === 'passed') p.log.success(`${outcome.packageName}: passed`);
+    else if (outcome.state === 'skipped') p.log.warn(`${outcome.packageName}: skipped`);
+    else p.log.error([`${outcome.packageName}: ${outcome.message}`, ...(outcome.details ?? []).map((d) => `  - ${d}`)].join('\n'));
+  }
+}
+
+async function runRelease(project: Project, target: ReleaseTarget, timeoutMs: number | undefined, skipChecks: string[]) {
   const ui = progress();
   let result;
   try {
-    result = await release(project, target, { step: ui.step, progress: (s) => ui.update(`Running migrations: ${s.message ?? s.state}`) }, { timeoutMs });
+    result = await release(
+      project,
+      target,
+      {
+        step: ui.step,
+        progress: (s) => ui.update(`Running migrations: ${s.message ?? s.state}`),
+        // Like test-upgrade's container output: in a terminal the step shows the latest line.
+        log: (pkg, line) => ui.update(`[${pkg}] ${line}`),
+        warn: (message) => p.log.warn(message),
+      },
+      { timeoutMs, skipChecks },
+    );
   } catch (err) {
     ui.fail();
     summarize(project, target, err instanceof MigrationTimeout ? 'Deploy still running: migrations continue on the deployment' : 'Deploy failed');

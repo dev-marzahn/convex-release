@@ -66,4 +66,5 @@ export declare const internal: FilterApi<
 
 export declare const components: {
   migrations: import("@convex-dev/migrations/_generated/component.js").ComponentApi<"migrations">;
+  predeployFixture: import("predeploy-fixture/_generated/component.js").ComponentApi<"predeployFixture">;
 };

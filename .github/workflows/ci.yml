@@ -42,7 +42,10 @@ jobs:
       - name: Verify the example's migrations against the base branch
         if: github.event_name == 'pull_request'
         working-directory: examples/basic
-        run: bunx convex-release verify
+        # The built CLI directly: `bun install` ran before the build, so Bun
+        # didn't link the package's bin (its target didn't exist yet), and
+        # `bunx convex-release` would look for an unscoped package on npm.
+        run: node ../../packages/convex-release/dist/cli.mjs verify
 
   e2e:
     name: End-to-end upgrades

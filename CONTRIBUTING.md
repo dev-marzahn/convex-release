@@ -17,12 +17,12 @@ The repo uses [Vite+](https://viteplus.dev): `vp check` runs Oxfmt, Oxlint and t
 
 ## Repository
 
-| Path                      | Contents                                                                                                                     |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `packages/convex-release` | The npm package: the CLI, the libraries the generated migrations and seeds files import, and the release images' entrypoint. |
-| `images/`                 | The Dockerfile for the release images and the build step they run in an app's build.                                         |
-| `examples/basic`          | An app with three migrations and two seeds.                                                                                  |
-| `e2e/`                    | Fixture apps v1 to v4 and the script that builds them from the images and upgrades them on real data.                        |
+| Path                      | Contents                                                                                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `packages/convex-release` | The npm package: the CLI, the libraries the generated migrations and seeds files import, and the release images' entrypoint.                     |
+| `images/`                 | The Dockerfile for the release images and the build step they run in an app's build.                                                             |
+| `examples/basic`          | An app with three migrations and two seeds.                                                                                                      |
+| `e2e/`                    | Fixture apps v1 to v5, a fixture library with a predeploy check, and the script that builds them from the images and upgrades them on real data. |
 
 ## End-to-end tests
 
@@ -31,11 +31,11 @@ bun run e2e                 # all scenarios, a few minutes
 bun run e2e steps oneshot   # only the named scenarios
 ```
 
-The script builds the package and the base images, builds the fixture apps from them, and upgrades v1 through v4 on one volume.
+The script builds the package and the base images, builds the fixture apps from them, and upgrades v1 through v4 on one volume. It uses v5 for the predeploy check scenarios.
 
 ## Pull requests
 
-- Run `bun run ready` before you push. Run `bun run e2e` too if you touched `images/`, `src/image/` or the deploy steps.
+- Run `bun run ready` before you push. Run `bun run e2e` too if you touched `images/`, `src/image/`, `src/predeploy*.ts` or the deploy steps.
 - Add a test for a bug fix or a new option.
 - Add a line under "Unreleased" in [CHANGELOG.md](CHANGELOG.md) for a change users will notice.
 - If you change how a command behaves, update [README.md](README.md) in the same pull request. It's the only README: packing the package copies it, and `LICENSE`, into `packages/convex-release`.

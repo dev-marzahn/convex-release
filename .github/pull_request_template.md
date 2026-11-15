@@ -5,6 +5,6 @@
 ## Checklist
 
 - [ ] `bun run ready` passes
-- [ ] `bun run e2e` passes, if this touches `images/`, `src/image/` or the deploy steps
+- [ ] `bun run e2e` passes, if this touches `images/`, `src/image/`, `src/predeploy*.ts` or the deploy steps
 - [ ] Tests cover the change
 - [ ] README.md and CHANGELOG.md are updated, if users will notice

@@ -1,5 +1,7 @@
-// End-to-end tests of the release images: fixture apps v1-v4 are built from
+// End-to-end tests of the release images: fixture apps v1-v5 are built from
 // the images exactly as a user's app would be, then upgraded on real data.
+// v4 and v5 depend on e2e/libs/predeploy-fixture, whose predeploy check
+// refuses a release while a flag document exists in its component.
 //
 //   bun run e2e            all scenarios
 //   bun run e2e steps oneshot   only these
@@ -59,17 +61,25 @@ type PackageManager = keyof typeof PACKAGE_MANAGERS;
  * With `pm`, the context gets that package manager's lockfile, and the image
  * is tagged `<version>-<pm>`.
  */
-function buildApp(version: string, base: 'combined' | 'oneshot', tarball: string, pm?: PackageManager) {
+function buildApp(version: string, base: 'combined' | 'oneshot', tarballs: Tarballs, pm?: PackageManager) {
   const context = mkdtempSync(join(tmpdir(), `${PREFIX}-${version}-`));
   try {
     cpSync(join(ROOT, 'e2e/apps', version), context, { recursive: true, filter: (src) => !src.includes('node_modules') });
-    cpSync(tarball, join(context, 'convex-release.tgz'));
     const catalog = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { catalog: Record<string, string> }).catalog;
     const manifest = JSON.parse(readFileSync(join(context, 'package.json'), 'utf8')) as Record<string, unknown>;
     for (const field of ['dependencies', 'devDependencies']) {
       const deps = (manifest[field] ?? {}) as Record<string, string>;
       for (const [name, range] of Object.entries(deps)) {
-        deps[name] = range === 'workspace:*' ? 'file:./convex-release.tgz' : range === 'catalog:' ? catalog[name]! : range;
+        if (range === 'workspace:*') {
+          // Each workspace package goes in as its own tarball, as an npm install would bring it.
+          const tarball = tarballs[name];
+          if (!tarball) throw new Error(`${version} depends on workspace package ${name}, which the e2e doesn't pack`);
+          const file = `${name.replace(/^@[^/]+\//, '')}.tgz`;
+          cpSync(tarball, join(context, file));
+          deps[name] = `file:./${file}`;
+        } else if (range === 'catalog:') {
+          deps[name] = catalog[name]!;
+        }
       }
     }
     const setup = pm ? PACKAGE_MANAGERS[pm] : undefined;
@@ -95,11 +105,15 @@ function buildApp(version: string, base: 'combined' | 'oneshot', tarball: string
   }
 }
 
-function packTarball(): string {
-  const dir = mkdtempSync(join(tmpdir(), `${PREFIX}-pack-`));
-  sh('bun', ['pm', 'pack', '--destination', dir, '--quiet'], { cwd: join(ROOT, 'packages/convex-release') });
-  const file = sh('ls', [dir]).trim().split('\n')[0]!;
-  return join(dir, file);
+/** Workspace packages the fixture apps depend on, by name: the path of each one's packed tarball. */
+type Tarballs = Record<string, string>;
+
+/** Packs the workspace package in `dir` (relative to the repo root) into its own temporary folder. */
+function packTarball(dir: string): string {
+  const out = mkdtempSync(join(tmpdir(), `${PREFIX}-pack-`));
+  sh('bun', ['pm', 'pack', '--destination', out, '--quiet'], { cwd: join(ROOT, dir) });
+  const file = sh('ls', [out]).trim().split('\n')[0]!;
+  return join(out, file);
 }
 
 // ------------------------------------------------------------- containers ---
@@ -159,16 +173,93 @@ function adminKey(name = container('app')): string {
   return docker('exec', name, './generate_admin_key.sh').trim().split('\n').at(-1)!;
 }
 
-async function call<T>(path: string, args: object, key = adminKey(), url = URL): Promise<T> {
+async function call<T>(path: string, args: object, key = adminKey(), url = URL, componentPath?: string): Promise<T> {
   const res = await fetch(`${url}/api/function`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Convex ${key}` },
-    body: JSON.stringify({ path, format: 'json', args }),
+    body: JSON.stringify({ path, format: 'json', args, ...(componentPath ? { componentPath } : {}) }),
   });
   const r = (await res.json()) as { status: string; value: T; errorMessage?: string };
   if (r.status !== 'success') throw new Error(`${path}: ${r.errorMessage}`);
   return r.value;
 }
+
+/** A stock backend, without any app, for the one-shot images to deploy to. Returns its admin key. */
+async function startBackend(): Promise<string> {
+  docker('network', 'create', `${PREFIX}-net`);
+  docker(
+    'run',
+    '-d',
+    '--name',
+    container('backend'),
+    '--network',
+    `${PREFIX}-net`,
+    '-p',
+    `${PORT}:3210`,
+    '-e',
+    'INSTANCE_NAME=e2e',
+    '-e',
+    `INSTANCE_SECRET=${SECRET}`,
+    '-v',
+    `${PREFIX}-data:/convex/data`,
+    BACKEND_IMAGE,
+  );
+  while (
+    !(await fetch(`${URL}/version`).then(
+      (r) => r.ok,
+      () => false,
+    ))
+  )
+    await sleep(500);
+  return adminKey(container('backend'));
+}
+
+/** Applies a one-shot app image to the backend `startBackend` started. */
+function applyOneshot(version: string) {
+  return spawnSync(
+    'docker',
+    [
+      'run',
+      '--rm',
+      '--network',
+      `${PREFIX}-net`,
+      '-e',
+      `CONVEX_URL=http://${container('backend')}:3210`,
+      '-e',
+      'INSTANCE_NAME=e2e',
+      '-e',
+      `INSTANCE_SECRET=${SECRET}`,
+      `${PREFIX}-app:${version}-oneshot`,
+    ],
+    { encoding: 'utf8' },
+  );
+}
+
+/** Throws unless each expected text appears in `lines`, in this order, each as part of a line. */
+function expectLines(lines: string[], expected: string[], what: string) {
+  let at = 0;
+  for (const text of expected) {
+    const found = lines.findIndex((line, i) => i >= at && line.includes(text));
+    expect(found >= 0, `${what}: no line with ${JSON.stringify(text)} after line ${at}:\n${lines.join('\n')}`);
+    at = found + 1;
+  }
+}
+
+/** Which app code is live: v5's `version:get`, or the "Could not find function" error on older ones. */
+async function liveVersion(key: string): Promise<string> {
+  try {
+    return await call<string>('version:get', {}, key);
+  } catch (err) {
+    if (/Could not find (public )?function/.test(String(err))) return 'older than v5';
+    throw err;
+  }
+}
+
+/** The fixture library's flag: while one exists, its predeploy check refuses every release. */
+const block = (key: string) => call('flags:block', { reason: 'e2e' }, key, URL, 'predeployFixture');
+const unblock = (key: string) => call('flags:unblock', {}, key, URL, 'predeployFixture');
+
+const REFUSAL = ['A predeploy check refused this release; nothing was pushed.', 'predeploy-fixture: blocked by a flag', '  - e2e', 'Skip a check with'];
 
 async function setEnv(name: string, value: string | null, key = adminKey()) {
   const res = await fetch(`${URL}/api/update_environment_variables`, {
@@ -449,7 +540,7 @@ const scenarios: Record<string, () => Promise<void>> = {
   /** The image build installs with the lockfile's package manager: npm, pnpm, Yarn 1 and Yarn 4. */
   async packageManagers() {
     for (const pm of Object.keys(PACKAGE_MANAGERS) as PackageManager[]) {
-      buildApp('v4', 'combined', tarball, pm);
+      buildApp('v4', 'combined', tarballs, pm);
       const run = await runCombined(`v4-${pm}`, `pm-${pm}`);
       expect(run.healthy, `${pm} build didn't become healthy:\n${run.log.join('\n')}`);
       await write('v4', 20);
@@ -467,51 +558,9 @@ const scenarios: Record<string, () => Promise<void>> = {
   },
 
   async oneshot() {
-    docker('network', 'create', `${PREFIX}-net`);
-    const backend = container('backend');
-    docker(
-      'run',
-      '-d',
-      '--name',
-      backend,
-      '--network',
-      `${PREFIX}-net`,
-      '-p',
-      `${PORT}:3210`,
-      '-e',
-      'INSTANCE_NAME=e2e',
-      '-e',
-      `INSTANCE_SECRET=${SECRET}`,
-      '-v',
-      `${PREFIX}-data:/convex/data`,
-      BACKEND_IMAGE,
-    );
-    while (
-      !(await fetch(`${URL}/version`).then(
-        (r) => r.ok,
-        () => false,
-      ))
-    )
-      await sleep(500);
-    const key = adminKey(backend);
+    const key = await startBackend();
     for (const version of ['v1', 'v4']) {
-      const result = spawnSync(
-        'docker',
-        [
-          'run',
-          '--rm',
-          '--network',
-          `${PREFIX}-net`,
-          '-e',
-          `CONVEX_URL=http://${backend}:3210`,
-          '-e',
-          'INSTANCE_NAME=e2e',
-          '-e',
-          `INSTANCE_SECRET=${SECRET}`,
-          `${PREFIX}-app:${version}-oneshot`,
-        ],
-        { encoding: 'utf8' },
-      );
+      const result = applyOneshot(version);
       expect(result.status === 0, `one-shot ${version} exited ${result.status}:\n${result.stdout}${result.stderr}`);
       log(`  one-shot ${version}: exit 0 (${result.stdout.trim().split('\n').at(-1)})`);
       await write(version, 100, key);
@@ -519,6 +568,102 @@ const scenarios: Record<string, () => Promise<void>> = {
     const summary = await check(key);
     expect(summary.wellFormed === 200 && summary.users === 100, JSON.stringify(summary));
     log(`  ${JSON.stringify(summary)}`);
+  },
+
+  /** A dependency's predeploy check refuses a combined image's start, and the skip setting overrides it. */
+  async predeploy() {
+    const v4 = await runCombined('v4', 'data');
+    expect(v4.healthy, `v4 failed:\n${v4.log.join('\n')}`);
+    await block(adminKey());
+
+    const refused = await runCombined('v5', 'data');
+    expect(!refused.healthy && refused.exitCode !== 0, `v5 should be refused, got exit ${refused.exitCode}:\n${refused.log.join('\n')}`);
+    expectLines(
+      refused.log,
+      REFUSAL.map((line, i) => `[convex-release] ${i === 0 ? 'deploy failed: ' : ''}${line}`),
+      'refusal',
+    );
+    const refusedAt = refused.log.findIndex((l) => l.includes('A predeploy check refused'));
+    expect(!refused.log.slice(0, refusedAt).some((l) => l.includes('pushed')), `v5 pushed before the refusal:\n${refused.log.join('\n')}`);
+    log('  v5 refused while the flag exists; nothing pushed');
+
+    const skipped = await runCombined('v5', 'data', ['-e', 'CONVEX_RELEASE_SKIP_CHECKS=predeploy-fixture']);
+    expect(skipped.healthy, `v5 with the skip failed:\n${skipped.log.join('\n')}`);
+    expectLines(skipped.log, ['[convex-release] skipped the predeploy check of predeploy-fixture (CONVEX_RELEASE_SKIP_CHECKS)'], 'skip');
+    expect((await liveVersion(adminKey())) === 'v5', 'v5 is not live after the skip');
+    log('  CONVEX_RELEASE_SKIP_CHECKS: v5 deployed with a warning');
+
+    await unblock(adminKey());
+    const passed = await runCombined('v5', 'data');
+    expect(passed.healthy, `v5 failed after unblocking:\n${passed.log.join('\n')}`);
+    // The facts come from the image build: collect read v5's package.json there.
+    expectLines(passed.log, ['[convex-release] [predeploy-fixture] checking e2e-app-v5'], 'facts');
+    expect((await liveVersion(adminKey())) === 'v5', 'v5 is not live');
+    log('  flag removed: v5 passes its check and starts');
+  },
+
+  /** The same refusal from the one-shot image, leaving the deployed code as it was. */
+  async predeployOneshot() {
+    const key = await startBackend();
+    const v4 = applyOneshot('v4');
+    expect(v4.status === 0, `one-shot v4 exited ${v4.status}:\n${v4.stdout}${v4.stderr}`);
+    await block(key);
+
+    const refused = applyOneshot('v5');
+    expect(refused.status !== 0, `one-shot v5 should be refused:\n${refused.stdout}`);
+    expectLines(refused.stdout.split('\n'), REFUSAL, 'refusal');
+    expect((await liveVersion(key)) === 'older than v5', 'v5 code went live despite the refusal');
+    log('  one-shot v5 refused; v4 code still live');
+
+    await unblock(key);
+    const passed = applyOneshot('v5');
+    expect(passed.status === 0, `one-shot v5 exited ${passed.status}:\n${passed.stdout}${passed.stderr}`);
+    expect((await liveVersion(key)) === 'v5', 'v5 is not live');
+    log('  flag removed: one-shot v5 deploys');
+  },
+
+  /** `check`, `dev` and `deploy` from a checkout, against a running v4. */
+  async predeployCli() {
+    const v4 = await runCombined('v4', 'data');
+    expect(v4.healthy, `v4 failed:\n${v4.log.join('\n')}`);
+    const key = adminKey();
+    await block(key);
+    const app = join(ROOT, 'e2e/apps/v5');
+    const cli = (...args: string[]) => {
+      const result = spawnSync('node', [join(ROOT, 'packages/convex-release/dist/cli.mjs'), ...args], {
+        cwd: app,
+        encoding: 'utf8',
+        env: { ...process.env, CI: '1', CONVEX_SELF_HOSTED_URL: URL, CONVEX_SELF_HOSTED_ADMIN_KEY: key, CONVEX_DEPLOYMENT: '', CONVEX_DEPLOY_KEY: '' },
+      });
+      return { status: result.status, lines: `${result.stdout}\n${result.stderr}`.split('\n') };
+    };
+    try {
+      const checked = cli('check');
+      expect(checked.status === 1, `check should exit 1, got ${checked.status}:\n${checked.lines.join('\n')}`);
+      expectLines(checked.lines, ['predeploy-fixture: blocked by a flag'], 'check');
+
+      const checkSkipped = cli('check', '--skip-check', 'predeploy-fixture');
+      expect(checkSkipped.status === 0, `check --skip-check should exit 0, got ${checkSkipped.status}:\n${checkSkipped.lines.join('\n')}`);
+      expectLines(checkSkipped.lines, ['predeploy-fixture: skipped'], 'check --skip-check');
+      log('  check: reports the failed check (exit 1), and the skipped one');
+
+      for (const command of [['dev', '--once'], ['deploy']]) {
+        const refused = cli(...command);
+        expect(refused.status === 1, `${command.join(' ')} should exit 1, got ${refused.status}:\n${refused.lines.join('\n')}`);
+        expectLines(refused.lines, REFUSAL, command.join(' '));
+        expect((await liveVersion(key)) === 'older than v5', `${command.join(' ')} pushed v5 despite the refusal`);
+      }
+      log('  dev --once and deploy: refused, nothing pushed');
+
+      const skipped = cli('deploy', '--skip-check', 'predeploy-fixture');
+      expect(skipped.status === 0, `deploy --skip-check exited ${skipped.status}:\n${skipped.lines.join('\n')}`);
+      expectLines(skipped.lines, ['skipped the predeploy check of predeploy-fixture (--skip-check)'], 'deploy --skip-check');
+      expect((await liveVersion(key)) === 'v5', 'v5 is not live after deploy --skip-check');
+      log('  deploy --skip-check: v5 deployed with a warning');
+    } finally {
+      // `convex dev` saves the deployment's URLs next to the app.
+      rmSync(join(app, '.env.local'), { force: true });
+    }
   },
 };
 
@@ -529,13 +674,16 @@ const selected = wanted.length > 0 ? wanted : Object.keys(scenarios);
 for (const name of selected) if (!scenarios[name]) throw new Error(`unknown scenario ${name}; known: ${Object.keys(scenarios).join(', ')}`);
 
 buildImages();
-const tarball = packTarball();
-const needs = new Set(selected.includes('oneshot') ? ['oneshot'] : []);
-for (const version of ['v1', 'v2', 'v3', 'v4']) {
-  buildApp(version, 'combined', tarball);
-  if (needs.has('oneshot') && (version === 'v1' || version === 'v4')) buildApp(version, 'oneshot', tarball);
+const tarballs: Tarballs = {
+  '@dev-marzahn/convex-release': packTarball('packages/convex-release'),
+  'predeploy-fixture': packTarball('e2e/libs/predeploy-fixture'),
+};
+const oneshot = new Set([...(selected.includes('oneshot') ? ['v1', 'v4'] : []), ...(selected.includes('predeployOneshot') ? ['v4', 'v5'] : [])]);
+for (const version of ['v1', 'v2', 'v3', 'v4', 'v5']) {
+  buildApp(version, 'combined', tarballs);
+  if (oneshot.has(version)) buildApp(version, 'oneshot', tarballs);
 }
-log('built fixture apps v1-v4');
+log('built fixture apps v1-v5');
 
 const failures: string[] = [];
 for (const name of selected) {
@@ -550,6 +698,6 @@ for (const name of selected) {
   }
 }
 removeAll();
-rmSync(dirname(tarball), { recursive: true, force: true });
+for (const tarball of Object.values(tarballs)) rmSync(dirname(tarball), { recursive: true, force: true });
 log(`\n${selected.length - failures.length}/${selected.length} scenarios passed${failures.length ? `; failed: ${failures.join(', ')}` : ''}`);
 process.exit(failures.length ? 1 : 0);

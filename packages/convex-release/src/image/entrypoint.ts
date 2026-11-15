@@ -16,6 +16,14 @@
 //   CONVEX_RELEASE_ON_DOWNGRADE=reset      wipe the data instead of refusing
 //                                          a release older than the data.
 //
+// And one for any installation:
+//   CONVEX_RELEASE_SKIP_CHECKS=<pkg>,<pkg>  don't run these dependencies'
+//                                          predeploy checks (after confirming
+//                                          the release is safe).
+//
+// Before pass 1, the dependencies' predeploy checks run (bundled next to
+// push.json with their facts); any failure refuses the release.
+//
 // Any failure exits non-zero, so neither mode reports success on a half-applied
 // release. Restarting runs everything again: pushes are idempotent and finished
 // migrations are skipped.
@@ -23,7 +31,21 @@
 // No dependencies beyond Node: this runs in the backend image as it is.
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
+
+import {
+  apiSpecIdentifier,
+  applySkips,
+  COMPONENT_NOT_DEPLOYED,
+  parseSkipList,
+  QueryError,
+  refusal,
+  runChecks,
+  type CollectedCheck,
+  type PredeployTransport,
+} from '../predeploy.ts';
 
 const START = 'migrations/_generated:start';
 const STATUS = 'migrations/_generated:status';
@@ -35,6 +57,9 @@ const READY_FILE = process.env.CONVEX_RELEASE_READY_FILE ?? '/tmp/convex-ready';
 const SNAPSHOT = process.env.CONVEX_RELEASE_SNAPSHOT || undefined;
 const SEED_ON_EMPTY = /^(1|true|yes)$/i.test(process.env.CONVEX_RELEASE_SEED ?? '');
 const ON_DOWNGRADE = process.env.CONVEX_RELEASE_ON_DOWNGRADE ?? 'refuse';
+const SKIP_CHECKS = parseSkipList(process.env.CONVEX_RELEASE_SKIP_CHECKS);
+/** Installed next to this file in the images. */
+const RUNNER = fileURLToPath(new URL('./predeploy-runner.mjs', import.meta.url));
 const POLL_MS = 1000;
 /** A read right after `start` can still show the previous run's failure. */
 const FAILED_READS = 3;
@@ -48,9 +73,18 @@ interface ReleaseStatus {
 interface Manifest {
   migrations: string[];
   seeds?: boolean;
+  /** By package name; `module` is relative to release.json. */
+  checks?: Record<string, { protocol: number; module: string; facts: unknown }>;
 }
 
 const log = (message: string) => console.log(`[convex-release] ${message}`);
+
+/** `deploy failed: <first line>`, then every further line of the error with the prefix too. */
+function logFailure(err: unknown) {
+  const [first, ...rest] = (err instanceof Error ? err.message : String(err)).split('\n');
+  log(`deploy failed: ${first}`);
+  for (const line of rest) log(line);
+}
 
 async function waitForBackend(url: string) {
   for (;;) {
@@ -92,11 +126,25 @@ async function push(url: string, key: string, req: object, label: string) {
   log(`${label}: pushed`);
 }
 
-async function call<T>(url: string, key: string, path: string, args: object = {}, endpoint = '/api/function'): Promise<T> {
-  const r = await post<{ status: string; value: T; errorMessage?: string }>(url, endpoint, { path, format: 'json', args }, key);
+async function call<T>(url: string, key: string, path: string, args: object = {}, endpoint = '/api/function', componentPath?: string): Promise<T> {
+  const r = await post<{ status: string; value: T; errorMessage?: string }>(
+    url,
+    endpoint,
+    { path, format: 'json', args, ...(componentPath ? { componentPath } : {}) },
+    key,
+  );
   if (r.status !== 'success') throw new Error(`${path}: ${r.errorMessage}`);
   return r.value;
 }
+
+interface Component {
+  id: string;
+  path: string;
+  state?: string;
+}
+
+/** The deployment's components; a component a release removed stays listed as `unmounted`. */
+const listComponents = (url: string, key: string) => call<Component[]>(url, key, '_system/frontend/components:list', {}, '/api/query');
 
 async function runMigrations(url: string, key: string) {
   await call(url, key, START);
@@ -125,7 +173,7 @@ async function runMigrations(url: string, key: string) {
  * broken read never lets an older version through.
  */
 async function recordedMigrations(url: string, key: string): Promise<{ name: string; isDone: boolean }[]> {
-  const components = await call<{ path: string }[]>(url, key, '_system/frontend/components:list', {}, '/api/query');
+  const components = await listComponents(url, key);
   if (!components.some((c) => c.path === 'migrations')) return [];
   const r = await post<{ status: string; value: { name: string; isDone: boolean }[]; errorMessage?: string }>(
     url,
@@ -173,6 +221,66 @@ async function checkDowngrade(url: string, key: string, after: 'start' | 'snapsh
   throw new Error(
     `the data was upgraded by a newer version of the app (migrations not in this one: ${newer}). Run that version or a newer one; nothing was pushed.`,
   );
+}
+
+/**
+ * Predeploy check queries over the HTTP API, read-only: each target's type is
+ * looked up with apiSpec before it's called. `/api/query` would enforce that
+ * by itself, but it doesn't call component functions, so calls go through
+ * `/api/function`.
+ */
+function httpTransport(url: string, key: string): PredeployTransport {
+  let components: Promise<Component[]> | undefined;
+  const specs = new Map<string, Promise<{ identifier: string; functionType: string }[]>>();
+  return {
+    async query(target, args) {
+      const name = target.componentPath ? `${target.componentPath}/${target.path}` : target.path;
+      let componentId: string | undefined;
+      if (target.componentPath) {
+        components ??= listComponents(url, key);
+        const component = (await components).find((c) => c.path === target.componentPath && c.state === 'active');
+        if (!component) throw new QueryError(`${target.componentPath} isn't deployed`, COMPONENT_NOT_DEPLOYED);
+        componentId = component.id;
+      }
+      const specKey = componentId ?? '';
+      if (!specs.has(specKey)) specs.set(specKey, call(url, key, '_system/cli/modules:apiSpec', componentId ? { componentId } : {}, '/api/query'));
+      const fn = (await specs.get(specKey)!).find((f) => f.identifier === apiSpecIdentifier(target.path));
+      if (!fn) throw new QueryError(`${name} isn't deployed`);
+      if (fn.functionType !== 'Query') throw new QueryError(`${name} isn't a query; predeploy checks can only read`);
+      try {
+        return await call(url, key, target.path, args, '/api/function', target.componentPath);
+      } catch (err) {
+        throw new QueryError(err instanceof Error ? err.message : String(err));
+      }
+    },
+  };
+}
+
+/**
+ * Runs the bundled predeploy checks before anything is pushed and throws the
+ * refusal if one fails. A misspelled CONVEX_RELEASE_SKIP_CHECKS name is
+ * reported even when no check is bundled.
+ */
+async function predeployChecks(url: string, key: string) {
+  const bundled = readManifest()?.checks ?? {};
+  const checks: CollectedCheck[] = Object.entries(bundled).map(([packageName, c]) => ({
+    packageName,
+    modulePath: resolve(dirname(MANIFEST_FILE), c.module),
+    protocol: c.protocol,
+    facts: c.facts,
+  }));
+  const { run, skipped, warnings } = applySkips(
+    checks.map((c) => c.packageName),
+    SKIP_CHECKS,
+    'CONVEX_RELEASE_SKIP_CHECKS',
+  );
+  for (const line of [...skipped.map((o) => o.message!), ...warnings]) log(line);
+  const toRun = checks.filter((c) => run.has(c.packageName));
+  if (toRun.length === 0) return;
+  log(`running ${toRun.length} predeploy check${toRun.length === 1 ? '' : 's'}`);
+  const outcomes = await runChecks(toRun, httpTransport(url, key), { runnerPath: RUNNER, log: (pkg, line) => log(`[${pkg}] ${line}`) });
+  const refused = refusal(outcomes, 'CONVEX_RELEASE_SKIP_CHECKS=<package>');
+  if (refused) throw new Error(refused);
 }
 
 /** True when no table in the app (outside components) has a document. */
@@ -253,6 +361,7 @@ async function importZip(url: string, key: string, zip: Buffer, label: string) {
 async function apply(url: string, key: string) {
   await waitForBackend(url);
   await checkDowngrade(url, key);
+  await predeployChecks(url, key);
   const strict = JSON.parse(readFileSync(PUSH_FILE, 'utf8')) as object;
   const relaxed = existsSync(RELAXED_FILE) ? (JSON.parse(readFileSync(RELAXED_FILE, 'utf8')) as object) : undefined;
   await push(url, key, relaxed ?? strict, relaxed ? 'pass 1 (validation off)' : 'push');
@@ -312,7 +421,7 @@ function combined() {
     })
     .catch((err: unknown) => {
       failed = true;
-      log(`deploy failed: ${err instanceof Error ? err.message : String(err)}`);
+      logFailure(err);
       backend.kill('SIGINT');
       setTimeout(() => process.exit(1), 10_000).unref();
     });
@@ -320,7 +429,7 @@ function combined() {
 
 if (process.env.CONVEX_URL) {
   oneShot(process.env.CONVEX_URL).catch((err: unknown) => {
-    log(`deploy failed: ${err instanceof Error ? err.message : String(err)}`);
+    logFailure(err);
     process.exit(1);
   });
 } else if (!existsSync('./run_backend.sh')) {

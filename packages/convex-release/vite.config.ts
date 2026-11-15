@@ -14,5 +14,13 @@ export default defineConfig({
       dts: false,
       clean: false,
     },
+    {
+      // Runs one predeploy check module: standalone, Node built-ins only. A
+      // config of its own, so no code it shares with the entrypoint ends up in
+      // a chunk file.
+      entry: { 'predeploy-runner': 'src/predeploy-runner.ts' },
+      dts: false,
+      clean: false,
+    },
   ],
 });

@@ -1,0 +1,33 @@
+{
+  "name": "predeploy-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "files": [
+    "dist",
+    "predeploy.mjs"
+  ],
+  "type": "module",
+  "exports": {
+    "./convex.config": {
+      "types": "./dist/component/convex.config.d.ts",
+      "default": "./dist/component/convex.config.js"
+    },
+    "./_generated/component.js": {
+      "types": "./dist/component/_generated/component.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "convex": "catalog:",
+    "typescript": "catalog:"
+  },
+  "peerDependencies": {
+    "convex": "^1.50.0"
+  },
+  "convex-release": {
+    "predeploy": "./predeploy.mjs"
+  }
+}

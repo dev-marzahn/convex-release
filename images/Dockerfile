@@ -23,6 +23,8 @@ FROM ${BACKEND_IMAGE} AS backend
 
 FROM ${BACKEND_IMAGE} AS combined-runtime
 COPY packages/convex-release/dist/image/entrypoint.mjs /convex/release.mjs
+# Runs each predeploy check module; the entrypoint finds it next to itself.
+COPY packages/convex-release/dist/predeploy-runner.mjs /convex/predeploy-runner.mjs
 # `bundle` refuses an app whose convex-release version differs from this one.
 COPY packages/convex-release/package.json /convex/release-package.json
 COPY images/onbuild.sh /convex/onbuild.sh
@@ -45,6 +47,7 @@ FROM ${NODE_IMAGE} AS oneshot-runtime
 # Derives the admin key from the backend's INSTANCE_NAME and INSTANCE_SECRET.
 COPY --from=backend /convex/generate_key /convex/generate_key
 COPY packages/convex-release/dist/image/entrypoint.mjs /convex/release.mjs
+COPY packages/convex-release/dist/predeploy-runner.mjs /convex/predeploy-runner.mjs
 COPY packages/convex-release/package.json /convex/release-package.json
 COPY images/onbuild.sh /convex/onbuild.sh
 WORKDIR /convex
