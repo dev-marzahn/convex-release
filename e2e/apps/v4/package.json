@@ -5,7 +5,8 @@
   "dependencies": {
     "@convex-dev/migrations": "catalog:",
     "@dev-marzahn/convex-release": "workspace:*",
-    "convex": "catalog:"
+    "convex": "catalog:",
+    "predeploy-fixture": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:"

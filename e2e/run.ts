@@ -59,17 +59,25 @@ type PackageManager = keyof typeof PACKAGE_MANAGERS;
  * With `pm`, the context gets that package manager's lockfile, and the image
  * is tagged `<version>-<pm>`.
  */
-function buildApp(version: string, base: 'combined' | 'oneshot', tarball: string, pm?: PackageManager) {
+function buildApp(version: string, base: 'combined' | 'oneshot', tarballs: Tarballs, pm?: PackageManager) {
   const context = mkdtempSync(join(tmpdir(), `${PREFIX}-${version}-`));
   try {
     cpSync(join(ROOT, 'e2e/apps', version), context, { recursive: true, filter: (src) => !src.includes('node_modules') });
-    cpSync(tarball, join(context, 'convex-release.tgz'));
     const catalog = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { catalog: Record<string, string> }).catalog;
     const manifest = JSON.parse(readFileSync(join(context, 'package.json'), 'utf8')) as Record<string, unknown>;
     for (const field of ['dependencies', 'devDependencies']) {
       const deps = (manifest[field] ?? {}) as Record<string, string>;
       for (const [name, range] of Object.entries(deps)) {
-        deps[name] = range === 'workspace:*' ? 'file:./convex-release.tgz' : range === 'catalog:' ? catalog[name]! : range;
+        if (range === 'workspace:*') {
+          // Each workspace package goes in as its own tarball, as an npm install would bring it.
+          const tarball = tarballs[name];
+          if (!tarball) throw new Error(`${version} depends on workspace package ${name}, which the e2e doesn't pack`);
+          const file = `${name.replace(/^@[^/]+\//, '')}.tgz`;
+          cpSync(tarball, join(context, file));
+          deps[name] = `file:./${file}`;
+        } else if (range === 'catalog:') {
+          deps[name] = catalog[name]!;
+        }
       }
     }
     const setup = pm ? PACKAGE_MANAGERS[pm] : undefined;
@@ -95,11 +103,15 @@ function buildApp(version: string, base: 'combined' | 'oneshot', tarball: string
   }
 }
 
-function packTarball(): string {
-  const dir = mkdtempSync(join(tmpdir(), `${PREFIX}-pack-`));
-  sh('bun', ['pm', 'pack', '--destination', dir, '--quiet'], { cwd: join(ROOT, 'packages/convex-release') });
-  const file = sh('ls', [dir]).trim().split('\n')[0]!;
-  return join(dir, file);
+/** Workspace packages the fixture apps depend on, by name: the path of each one's packed tarball. */
+type Tarballs = Record<string, string>;
+
+/** Packs the workspace package in `dir` (relative to the repo root) into its own temporary folder. */
+function packTarball(dir: string): string {
+  const out = mkdtempSync(join(tmpdir(), `${PREFIX}-pack-`));
+  sh('bun', ['pm', 'pack', '--destination', out, '--quiet'], { cwd: join(ROOT, dir) });
+  const file = sh('ls', [out]).trim().split('\n')[0]!;
+  return join(out, file);
 }
 
 // ------------------------------------------------------------- containers ---
@@ -449,7 +461,7 @@ const scenarios: Record<string, () => Promise<void>> = {
   /** The image build installs with the lockfile's package manager: npm, pnpm, Yarn 1 and Yarn 4. */
   async packageManagers() {
     for (const pm of Object.keys(PACKAGE_MANAGERS) as PackageManager[]) {
-      buildApp('v4', 'combined', tarball, pm);
+      buildApp('v4', 'combined', tarballs, pm);
       const run = await runCombined(`v4-${pm}`, `pm-${pm}`);
       expect(run.healthy, `${pm} build didn't become healthy:\n${run.log.join('\n')}`);
       await write('v4', 20);
@@ -529,11 +541,14 @@ const selected = wanted.length > 0 ? wanted : Object.keys(scenarios);
 for (const name of selected) if (!scenarios[name]) throw new Error(`unknown scenario ${name}; known: ${Object.keys(scenarios).join(', ')}`);
 
 buildImages();
-const tarball = packTarball();
+const tarballs: Tarballs = {
+  '@dev-marzahn/convex-release': packTarball('packages/convex-release'),
+  'predeploy-fixture': packTarball('e2e/libs/predeploy-fixture'),
+};
 const needs = new Set(selected.includes('oneshot') ? ['oneshot'] : []);
 for (const version of ['v1', 'v2', 'v3', 'v4']) {
-  buildApp(version, 'combined', tarball);
-  if (needs.has('oneshot') && (version === 'v1' || version === 'v4')) buildApp(version, 'oneshot', tarball);
+  buildApp(version, 'combined', tarballs);
+  if (needs.has('oneshot') && (version === 'v1' || version === 'v4')) buildApp(version, 'oneshot', tarballs);
 }
 log('built fixture apps v1-v4');
 
@@ -550,6 +565,6 @@ for (const name of selected) {
   }
 }
 removeAll();
-rmSync(dirname(tarball), { recursive: true, force: true });
+for (const tarball of Object.values(tarballs)) rmSync(dirname(tarball), { recursive: true, force: true });
 log(`\n${selected.length - failures.length}/${selected.length} scenarios passed${failures.length ? `; failed: ${failures.join(', ')}` : ''}`);
 process.exit(failures.length ? 1 : 0);

@@ -5,7 +5,8 @@
   "workspaces": [
     "packages/*",
     "examples/*",
-    "e2e/apps/*"
+    "e2e/apps/*",
+    "e2e/libs/*"
   ],
   "type": "module",
   "scripts": {
