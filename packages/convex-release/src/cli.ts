@@ -271,11 +271,12 @@ program
   .command('bundle')
   .description('Write the push requests an image applies (run by the image build).')
   .argument('[outDir]', 'where to write push.json and push.relaxed.json', '.convex-release')
-  .action((outDir: string) => {
+  .action(async (outDir: string) => {
     const project = findProject();
-    const result = bundle(project, resolve(outDir));
+    const result = await bundle(project, resolve(outDir));
+    const checks = result.checks > 0 ? `, and ${result.checks} predeploy check${result.checks === 1 ? '' : 's'}` : '';
     p.log.success(
-      `Bundled ${result.modules} modules${result.relaxed ? ` and ${result.migrations} migration${result.migrations === 1 ? '' : 's'} (two passes)` : ' (no migrations: one pass)'}`,
+      `Bundled ${result.modules} modules${result.relaxed ? ` and ${result.migrations} migration${result.migrations === 1 ? '' : 's'} (two passes)` : ' (no migrations: one pass)'}${checks}`,
     );
   });
 
