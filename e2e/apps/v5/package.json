@@ -1,0 +1,14 @@
+{
+  "name": "e2e-app-v5",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@convex-dev/migrations": "catalog:",
+    "@dev-marzahn/convex-release": "workspace:*",
+    "convex": "catalog:",
+    "predeploy-fixture": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:"
+  }
+}

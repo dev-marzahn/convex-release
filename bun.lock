@@ -47,6 +47,18 @@
         "@types/node": "catalog:",
       },
     },
+    "e2e/apps/v5": {
+      "name": "e2e-app-v5",
+      "dependencies": {
+        "@convex-dev/migrations": "catalog:",
+        "@dev-marzahn/convex-release": "workspace:*",
+        "convex": "catalog:",
+        "predeploy-fixture": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "catalog:",
+      },
+    },
     "e2e/libs/predeploy-fixture": {
       "name": "predeploy-fixture",
       "version": "0.0.0",
@@ -420,6 +432,8 @@
     "e2e-app-v3": ["e2e-app-v3@workspace:e2e/apps/v3"],
 
     "e2e-app-v4": ["e2e-app-v4@workspace:e2e/apps/v4"],
+
+    "e2e-app-v5": ["e2e-app-v5@workspace:e2e/apps/v5"],
 
     "es-module-lexer": ["es-module-lexer@2.3.2", "", {}, "sha512-poHGpORABojJJucnV9KbOavETW8lBVnphkW77ER5/BQ5Fz7oXSoCNek7IH3vR5nRjdsEz926ibFYX8KtLQmdyw=="],
 
