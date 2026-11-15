@@ -4,6 +4,8 @@ This project follows [Epoch Semantic Versioning](https://antfu.me/posts/epoch-se
 
 ## Unreleased
 
+- Predeploy checks: a dependency can declare `convex-release.predeploy` in its `package.json`. `deploy`, both images and the first push of `dev` run that check before anything is pushed, and a failed check refuses the release. `check` reports the checks. `--skip-check` and `CONVEX_RELEASE_SKIP_CHECKS` skip a named check. Library authors can import the check types from `@dev-marzahn/convex-release`.
+
 ## 100.0.1 (2026-11-14)
 
 - convex-release is now licensed under MPL-2.0. 100.0.0 and earlier stay under MIT.

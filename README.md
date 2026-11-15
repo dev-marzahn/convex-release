@@ -44,6 +44,7 @@ The images do the same when a self-hosted container starts, so someone who runs 
 - [Commands](#commands)
 - [Self-hosted images](#self-hosted-images)
 - [Preview environments](#preview-environments)
+- [Predeploy checks](#predeploy-checks)
 - [CI](#ci)
 - [Limits](#limits)
 
@@ -174,35 +175,37 @@ A table seed writes 100 documents per transaction (`batchSize` changes that), an
 
 `dev`, `deploy` and the images run the same steps:
 
-1. Check that the deployment has no finished migrations this version doesn't know, and stop before pushing anything if it has.
+1. Check that the deployment has no finished migrations this version doesn't know, then run your dependencies' [predeploy checks](#predeploy-checks), and stop before pushing anything if either fails.
 2. Push your code with a copy of your schema that sets `schemaValidation: false`; your files don't change. Your new functions and indexes go live, though existing documents may not match the schema yet, and the backend doesn't check new writes against it either.
 3. Run the pending migrations until they finish.
 4. Push again with validation on. The backend checks every document against the schema and rejects the push if one doesn't match.
 
-Step 1 stops when a newer version of your app ran migrations this one lacks, or someone renamed or renumbered a finished migration. It also stops when it can't read what the deployment has recorded. When a version has no migration files at all, the images push once, with validation on; `dev` and `deploy` still push twice.
+Step 1 stops when a newer version of your app ran migrations this one lacks, or someone renamed or renumbered a finished migration, or a predeploy check fails. It also stops when it can't read what the deployment has recorded. When a version has no migration files at all, the images push once, with validation on; `dev` and `deploy` still push twice.
 
 If a migration throws, the deploy stops during step 3, skips step 4 and reports the error. Your new code stays deployed with validation off. Fix the cause in the same file and deploy again: the migration continues from the batch that failed. A renamed file starts over as a new migration, and the old one stays recorded as failed.
 
-`convex-release check` runs step 4 as a dry run, without changing anything. It tells you whether your schema accepts the data as it is. If not, it lists the pending migrations, which run first and may fix it, or exits with code 1 when there are none, so you need to write one.
+`convex-release check` runs step 4 as a dry run, without changing anything. It tells you whether your schema accepts the data as it is. If not, it lists the pending migrations, which run first and may fix it, or exits with code 1 when there are none, so you need to write one. It also runs the predeploy checks and exits with code 1 when one fails.
 
 ## Commands
 
-| Command                       | What it does                                                                                                                                                    |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `init`                        | Sets up the packages and the migrations component. `--docker` adds the Docker files, `--ci` the GitHub Actions workflows.                                       |
-| `new <name> --table <table>`  | Creates the next numbered migration. `--seed` creates the next seed file instead.                                                                               |
-| `dev`                         | Deploys to your dev deployment, seeds it if it's empty, then runs `convex dev`. `--once` stops after the deploy.                                                |
-| `seed`                        | Runs the seeds on a deployment without data. `--force` seeds one with data.                                                                                     |
-| `deploy`                      | Deploys to the deployment `convex deploy` would use: prod, the one a `CONVEX_DEPLOY_KEY` names, a self-hosted URL, or `--deployment <name>`.                    |
-| `status`                      | Lists each migration as done, running, pending, failed or canceled on the deployment, with document counts, and flags recorded ones your checkout doesn't have. |
-| `check`                       | Dry-runs the schema against the deployment's data.                                                                                                              |
-| `verify`                      | Compares the migrations with a base branch. Needs no deployment.                                                                                                |
-| `codegen`                     | Rewrites `convex/migrations/_generated.ts` and `convex/seeds/_generated.ts`.                                                                                    |
-| `build`                       | Builds the image, tagged `<name>:<version>` from package.json, or `<name>-oneshot:<version>` with `--oneshot`. `--tag` sets another.                            |
-| `test-upgrade --from <image>` | Upgrades a previous version's data to this one in throwaway containers.                                                                                         |
-| `bundle [dir]`                | Writes what an image applies: the push requests (`push.json`, `push.relaxed.json`) and `release.json`. The image build runs it.                                 |
+| Command                       | What it does                                                                                                                                                             |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `init`                        | Sets up the packages and the migrations component. `--docker` adds the Docker files, `--ci` the GitHub Actions workflows.                                                |
+| `new <name> --table <table>`  | Creates the next numbered migration. `--seed` creates the next seed file instead.                                                                                        |
+| `dev`                         | Deploys to your dev deployment, seeds it if it's empty, then runs `convex dev`. `--once` stops after the deploy.                                                         |
+| `seed`                        | Runs the seeds on a deployment without data. `--force` seeds one with data.                                                                                              |
+| `deploy`                      | Deploys to the deployment `convex deploy` would use: prod, the one a `CONVEX_DEPLOY_KEY` names, a self-hosted URL, or `--deployment <name>`.                             |
+| `status`                      | Lists each migration as done, running, pending, failed or canceled on the deployment, with document counts, and flags recorded ones your checkout doesn't have.          |
+| `check`                       | Dry-runs the schema against the deployment's data, and runs the predeploy checks.                                                                                        |
+| `verify`                      | Compares the migrations with a base branch. Needs no deployment.                                                                                                         |
+| `codegen`                     | Rewrites `convex/migrations/_generated.ts` and `convex/seeds/_generated.ts`.                                                                                             |
+| `build`                       | Builds the image, tagged `<name>:<version>` from package.json, or `<name>-oneshot:<version>` with `--oneshot`. `--tag` sets another.                                     |
+| `test-upgrade --from <image>` | Upgrades a previous version's data to this one in throwaway containers.                                                                                                  |
+| `bundle [dir]`                | Writes what an image applies: the push requests (`push.json`, `push.relaxed.json`), `release.json` and the predeploy check modules (`checks/`). The image build runs it. |
 
 `status`, `check` and `seed` take `--prod` and `--deployment <name>` and default to your dev deployment. `status`, `check`, `seed` and `verify` take `--json`.
+
+`dev`, `deploy` and `check` take `--skip-check <package>`, as often as needed, to skip that dependency's [predeploy check](#predeploy-checks).
 
 `dev` and `deploy` take `--timeout <seconds>`: when it runs out, the command exits with code 1 and the migrations keep going on the deployment. The next deploy waits for them and finishes. `test-upgrade --timeout` sets how long each version may take to become ready (default 600 seconds).
 
@@ -250,7 +253,7 @@ volumes:
   data:
 ```
 
-To upgrade, change the tag and run `docker compose up -d`. A tag older than the data makes the container exit before it pushes anything; go back to the newer tag.
+To upgrade, change the tag and run `docker compose up -d`. A tag older than the data makes the container exit before it pushes anything; go back to the newer tag. A failing [predeploy check](#predeploy-checks) does the same. Once you've confirmed the release is safe anyway, set `CONVEX_RELEASE_SKIP_CHECKS` to the package names to skip, comma-separated.
 
 If a migration throws in the container, the container stops its backend and exits with code 1, and `restart: unless-stopped` retries it on every start. Unlike with `convex-release deploy`, your whole app is down until a start succeeds, not just the new code. The logs show `[convex-release] deploy failed:` with the error; fix the migration in the same file and ship a new tag.
 
@@ -327,6 +330,67 @@ A snapshot from a newer version makes the container delete what it imported and 
 The snapshot holds the data of wherever you exported it, and the preview runs the pull request's code on it. Export from a staging deployment or strip personal data first.
 
 On a platform with per-pull-request previews, such as Coolify, give the previews their own `INSTANCE_SECRET` and set `CONVEX_RELEASE_SEED=true` and `CONVEX_RELEASE_ON_DOWNGRADE=reset` as preview-only variables. When a push to the pull request starts the new image on the preview's volume, a migration added later in the branch runs on the data the preview already has.
+
+Predeploy checks run before a `CONVEX_RELEASE_SNAPSHOT` import, so they don't see the snapshot's data. With `CONVEX_RELEASE_ON_DOWNGRADE=reset` they run on the emptied deployment.
+
+## Predeploy checks
+
+A library you depend on can refuse a release that would break data already in your deployment. For example, a workflow library can refuse a release that deletes code a running workflow still needs. You don't configure anything: installing the library as a direct dependency is enough.
+
+`dev`, `deploy` and both images run each dependency's check after the migration check in [step 1](#what-a-deploy-does), before anything is pushed. When one fails, the release stops and prints every failure:
+
+```text
+A predeploy check refused this release; nothing was pushed.
+@acme/workflows: workflow patch "prepare-before-publish" was removed, but 3 running workflows still need its old branch
+  - pipeline:run 3f9a…
+  - pipeline:run 77c1…
+Skip a check with --skip-check <package> only if you've confirmed the release is safe.
+```
+
+Nothing changed on the deployment. Fix what the check names, or skip it after you've confirmed the release is safe: `--skip-check <package>` on `dev`, `deploy` and `check`, or `CONVEX_RELEASE_SKIP_CHECKS=<package>,<package>` on an image. Each skip prints a warning naming the package. `convex-release check` runs the checks without deploying.
+
+`convex-release dev` checks only its first push. The pushes `convex dev` makes while it watches aren't checked.
+
+### Writing a check
+
+A library declares its check in its `package.json`:
+
+```json
+{ "convex-release": { "predeploy": "./dist/predeploy.mjs" } }
+```
+
+The module is one ESM file whose only imports are `node:` built-ins, because the images run it without your users' `node_modules`. Bundle it if it needs more. `convex-release bundle` loads it from an empty folder while the image builds, and fails the build if it imports anything else.
+
+```ts
+import type { PredeployCheckContext, PredeployCollectContext, PredeployResult } from '@dev-marzahn/convex-release';
+
+export const protocol = 1;
+
+/** Facts about the release being deployed, from the app's source. Must be plain JSON. */
+export async function collect({ projectRoot, convexDir }: PredeployCollectContext) {
+  return { patches: await readPatchIds(convexDir) };
+}
+
+/** Runs against the deployment before anything is pushed. Must only read. */
+export async function check({ facts, query, log }: PredeployCheckContext): Promise<PredeployResult> {
+  let blocked: string[];
+  try {
+    blocked = await query({ componentPath: 'workflows', path: 'patches:blocked' }, { declared: (facts as { patches: string[] }).patches });
+  } catch (err) {
+    // The release that first adds the library: there's nothing to protect yet.
+    if ((err as { code?: string }).code === 'COMPONENT_NOT_DEPLOYED') return { ok: true };
+    throw err;
+  }
+  return blocked.length === 0 ? { ok: true } : { ok: false, message: 'removed patches are still needed', details: blocked };
+}
+```
+
+- `collect` runs where the app's source is: `dev`, `deploy` and `check`, and `bundle` in the image build, which stores the facts in the image. `check` gets them as `facts`.
+- `query` calls a query function in the app, or in a component with `componentPath`. It rejects with `code: 'COMPONENT_NOT_DEPLOYED'` when that component is missing or was unmounted. A failed query rejects with the backend's error message in the images, and with the `convex` CLI's output from a checkout.
+- A check only reads. The images refuse to call anything but a query. From a checkout, `convex run` can't tell, so it's on you.
+- Each check runs in its own Node process, with only `PATH` in its environment and a 10-minute limit. A check that throws, exits, times out, returns anything but `{ ok: true }` or `{ ok: false, message, details? }`, or exports a `protocol` other than `1` counts as failed.
+- The check module comes from the release being deployed, and reads data the deployed release wrote. Keep the queries it calls callable, with the same arguments and result shape, from one version of your library to the next.
+- `protocol` is the version of the interface convex-release gives the module. A new protocol means a new major version of convex-release.
 
 ## CI
 
