@@ -9,6 +9,10 @@
 # package's npm settings name this workflow and that environment, so no token
 # is stored anywhere. The workflow only stages the version: it goes live when a
 # maintainer approves it with 2FA.
+#
+# A prerelease (v100.1.0-next.0, any version with a `-`) publishes under its
+# version only: the images skip the latest and runtime tags, and npm puts it on
+# the `next` dist-tag instead of `latest`.
 name: Release
 
 on:
@@ -96,15 +100,19 @@ jobs:
               oneshot) name=convex-release-oneshot suffix= ;;
               oneshot-runtime) name=convex-release-oneshot suffix=-runtime ;;
             esac
-            latest=latest
-            [ -n "$suffix" ] && latest=runtime
+            tags=(-t "ghcr.io/dev-marzahn/$name:$VERSION$suffix")
+            # A prerelease (100.1.0-next.0) doesn't move latest or runtime.
+            if [[ "$VERSION" != *-* ]]; then
+              latest=latest
+              [ -n "$suffix" ] && latest=runtime
+              tags+=(-t "ghcr.io/dev-marzahn/$name:$latest")
+            fi
             docker buildx build . -f images/Dockerfile --target "$target" --push \
               --platform linux/amd64,linux/arm64 \
               --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
               --label "org.opencontainers.image.version=$VERSION" \
               --label "org.opencontainers.image.licenses=MPL-2.0 AND FSL-1.1-Apache-2.0" \
-              -t "ghcr.io/dev-marzahn/$name:$VERSION$suffix" \
-              -t "ghcr.io/dev-marzahn/$name:$latest"
+              "${tags[@]}"
           done
 
   npm:
@@ -138,6 +146,11 @@ jobs:
         working-directory: ${{ runner.temp }}
         env:
           PROVENANCE: ${{ github.event.repository.private && '--no-provenance' || '--provenance' }}
+          VERSION: ${{ needs.version.outputs.version }}
         # Stages the version; it goes live once a maintainer approves it with 2FA
         # under Staged Packages on npmjs.com, or with `npm stage approve <id>`.
-        run: npm stage publish ./*.tgz "$PROVENANCE" --access public
+        # A prerelease goes to the `next` dist-tag, so `latest` stays stable.
+        run: |
+          tag=latest
+          [[ "$VERSION" == *-* ]] && tag=next
+          npm stage publish ./*.tgz "$PROVENANCE" --access public --tag "$tag"
