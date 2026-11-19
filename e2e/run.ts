@@ -131,8 +131,13 @@ function removeAll() {
 interface Run {
   healthy: boolean;
   exitCode: number;
+  /** convex-release's lines and those of e2e/hooks.mjs. */
   log: string[];
+  /** Everything the container printed. */
+  all: string;
 }
+
+const OUR_LINES = /^\[(convex-release|hook)\]/;
 
 /**
  * Starts a combined app image on `volume` and waits until it's healthy or has
@@ -160,10 +165,9 @@ async function runCombined(version: string, volume: string, extra: string[] = []
   for (;;) {
     const state = docker('inspect', '-f', '{{.State.Health.Status}} {{.State.Running}} {{.State.ExitCode}}', name).trim().split(' ');
     if (state[0] === 'healthy' || state[1] !== 'true') {
-      const lines = docker('logs', name)
-        .split('\n')
-        .concat(spawnSync('docker', ['logs', name], { encoding: 'utf8' }).stderr.split('\n'));
-      return { healthy: state[0] === 'healthy', exitCode: Number(state[2]), log: lines.filter((l) => l.startsWith('[convex-release]')) };
+      const logs = spawnSync('docker', ['logs', name], { encoding: 'utf8' });
+      const lines = `${logs.stdout}\n${logs.stderr}`.split('\n');
+      return { healthy: state[0] === 'healthy', exitCode: Number(state[2]), log: lines.filter((l) => OUR_LINES.test(l)), all: lines.join('\n') };
     }
     await sleep(1000);
   }
@@ -214,8 +218,8 @@ async function startBackend(): Promise<string> {
   return adminKey(container('backend'));
 }
 
-/** Applies a one-shot app image to the backend `startBackend` started. */
-function applyOneshot(version: string) {
+/** Applies a one-shot app image to the backend `startBackend` started. `extra` goes to `docker run`. */
+function applyOneshot(version: string, extra: string[] = []) {
   return spawnSync(
     'docker',
     [
@@ -229,11 +233,89 @@ function applyOneshot(version: string) {
       'INSTANCE_NAME=e2e',
       '-e',
       `INSTANCE_SECRET=${SECRET}`,
+      ...extra,
       `${PREFIX}-app:${version}-oneshot`,
     ],
     { encoding: 'utf8' },
   );
 }
+
+/** Starts `version`'s image on `volume` with its backend alone, skipping the release, the way an operator fixes a deployment. */
+async function bareBackend(version: string, volume = 'data') {
+  const name = container('app');
+  spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore' });
+  docker(
+    'run',
+    '-d',
+    '--name',
+    name,
+    '-p',
+    `${PORT}:3210`,
+    '-e',
+    'INSTANCE_NAME=e2e',
+    '-e',
+    `INSTANCE_SECRET=${SECRET}`,
+    '-v',
+    `${PREFIX}-${volume}:/convex/data`,
+    '--entrypoint',
+    './run_backend.sh',
+    `${PREFIX}-app:${version}`,
+  );
+  while (
+    !(await fetch(`${URL}/version`).then(
+      (r) => r.ok,
+      () => false,
+    ))
+  )
+    await sleep(500);
+}
+
+/** A deployment variable, as a hook or the dashboard reads it. */
+async function getEnv(name: string, key = adminKey(), url = URL): Promise<string | undefined> {
+  const res = await fetch(`${url}/api/query`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Convex ${key}` },
+    body: JSON.stringify({ path: '_system/cli/queryEnvironmentVariables:get', format: 'json', args: { name } }),
+  });
+  const r = (await res.json()) as { status: string; value: { value: string } | null; errorMessage?: string };
+  if (r.status !== 'success') throw new Error(`reading ${name}: ${r.errorMessage}`);
+  return r.value?.value;
+}
+
+/** Mounts e2e/hooks.mjs and names it as both hooks, or `fail` for one of them. */
+function hooks({ prePush = 'pre-push', postApply = 'post-apply' } = {}): string[] {
+  return [
+    '-v',
+    `${join(ROOT, 'e2e/hooks.mjs')}:/hooks.mjs:ro`,
+    '-e',
+    `CONVEX_RELEASE_PRE_PUSH=node /hooks.mjs ${prePush}`,
+    '-e',
+    `CONVEX_RELEASE_POST_APPLY=node /hooks.mjs ${postApply}`,
+  ];
+}
+
+const BACKUPS = `${PREFIX}-backups`;
+
+/** The backup volume at /backups, with CONVEX_RELEASE_BACKUP_DIR pointing there. */
+const backups = (keep = 3) => ['-v', `${BACKUPS}:/backups`, '-e', 'CONVEX_RELEASE_BACKUP_DIR=/backups', '-e', `CONVEX_RELEASE_BACKUP_KEEP=${keep}`];
+
+/** Runs `script` in a throwaway container with the backup volume at /backups. */
+const inBackups = (script: string) => docker('run', '--rm', '-v', `${BACKUPS}:/backups`, '--entrypoint', 'sh', `${PREFIX}-app:v1`, '-c', script);
+
+/** The backup volume's files, sorted. */
+const listBackups = () => inBackups('ls -1 /backups').trim().split('\n').filter(Boolean).sort();
+
+const backupHash = (file: string) => inBackups(`sha256sum /backups/${file}`).split(' ')[0]!;
+
+/** A table's document count, through a system query every deployment has. */
+const tableSize = (table: string, key = adminKey()) =>
+  fetch(`${URL}/api/query`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Convex ${key}` },
+    body: JSON.stringify({ path: '_system/cli/tableSize:default', format: 'json', args: { tableName: table } }),
+  })
+    .then((r) => r.json() as Promise<{ value: number }>)
+    .then((r) => r.value);
 
 /** Throws unless each expected text appears in `lines`, in this order, each as part of a line. */
 function expectLines(lines: string[], expected: string[], what: string) {
@@ -362,32 +444,7 @@ const scenarios: Record<string, () => Promise<void>> = {
     expect(!failed.healthy && failed.exitCode === 1, `expected exit 1, got ${failed.exitCode}`);
     log(`  v4 with FAIL_AT: exit ${failed.exitCode} (${failed.log.find((l) => l.includes('failed'))})`);
     // Fix the cause with the backend alone, the way an operator would.
-    const bare = container('app');
-    spawnSync('docker', ['rm', '-f', bare], { stdio: 'ignore' });
-    docker(
-      'run',
-      '-d',
-      '--name',
-      bare,
-      '-p',
-      `${PORT}:3210`,
-      '-e',
-      'INSTANCE_NAME=e2e',
-      '-e',
-      `INSTANCE_SECRET=${SECRET}`,
-      '-v',
-      `${PREFIX}-data:/convex/data`,
-      '--entrypoint',
-      './run_backend.sh',
-      `${PREFIX}-app:v4`,
-    );
-    while (
-      !(await fetch(`${URL}/version`).then(
-        (r) => r.ok,
-        () => false,
-      ))
-    )
-      await sleep(500);
+    await bareBackend('v4');
     await setEnv('FAIL_AT', null);
     const resumed = await runCombined('v4', 'data');
     expect(resumed.healthy, `restart didn't resume:\n${resumed.log.join('\n')}`);
@@ -622,6 +679,192 @@ const scenarios: Record<string, () => Promise<void>> = {
     log('  flag removed: one-shot v5 deploys');
   },
 
+  /** CONVEX_RELEASE_PRE_PUSH and _POST_APPLY in the combined image: order, environment, the recorded version. */
+  async hooks() {
+    const first = await runCombined('v1', 'data', hooks());
+    expect(first.healthy, `v1 with hooks failed:\n${first.log.join('\n')}`);
+    expectLines(
+      first.log,
+      [
+        '[convex-release] pre-push hook: running',
+        '[hook] pre-push at http://127.0.0.1:3210: recorded version none',
+        '[convex-release] pre-push hook: done',
+        '[convex-release] push: pushed',
+        '[convex-release] post-apply hook: running',
+        '[hook] post-apply at http://127.0.0.1:3210: recorded version 1.0.0',
+        '[convex-release] post-apply hook: done',
+        '[convex-release] ready',
+      ],
+      'v1',
+    );
+    await write('v1', 50);
+    const upgrade = await runCombined('v4', 'data', hooks());
+    expect(upgrade.healthy, `v4 with hooks failed:\n${upgrade.log.join('\n')}`);
+    // The pre-push hook runs before any of v4's code exists; post-apply after the data matches it.
+    expectLines(
+      upgrade.log,
+      [
+        '[hook] pre-push at http://127.0.0.1:3210: recorded version 1.0.0',
+        'pass 1 (validation off): pushed',
+        'done: 3/3',
+        'pass 2 (validation on): pushed',
+        '[hook] post-apply at http://127.0.0.1:3210: recorded version 4.0.0',
+        '[convex-release] ready',
+      ],
+      'v4',
+    );
+    const key = adminKey();
+    expect(!`${first.all}\n${upgrade.all}`.includes(key), 'the admin key is in the logs');
+    expect((await getEnv('CONVEX_RELEASE_VERSION', key)) === '4.0.0', 'CONVEX_RELEASE_VERSION is not 4.0.0');
+    log('  pre-push before the first push, post-apply before ready; both read the recorded version; the key is not logged');
+  },
+
+  /** A failing hook stops the release: before anything is pushed (pre-push), or before ready (post-apply). */
+  async hookFailure() {
+    expect((await runCombined('v1', 'data')).healthy, 'v1 failed');
+    await write('v1', 50);
+    const prePush = await runCombined('v4', 'data', hooks({ prePush: 'fail' }));
+    expect(!prePush.healthy && prePush.exitCode === 1, `a failing pre-push hook should exit 1, got ${prePush.exitCode}`);
+    expectLines(prePush.log, ['[hook] failing on purpose', '[convex-release] deploy failed: pre-push hook failed (exit 3)'], 'pre-push');
+    expect(!prePush.log.some((l) => l.endsWith(': pushed')), `pushed despite the failed pre-push hook:\n${prePush.log.join('\n')}`);
+    log('  pre-push exits 3: exit 1, nothing pushed');
+
+    const postApply = await runCombined('v4', 'data', hooks({ postApply: 'fail' }));
+    expect(!postApply.healthy && postApply.exitCode === 1, `a failing post-apply hook should exit 1, got ${postApply.exitCode}`);
+    expectLines(postApply.log, ['pass 2 (validation on): pushed', '[hook] failing on purpose', 'deploy failed: post-apply hook failed (exit 3)'], 'post-apply');
+    expect(!postApply.log.some((l) => l.endsWith('ready')), 'reported ready despite the failed post-apply hook');
+    log('  post-apply exits 3: exit 1, never ready');
+
+    const fixed = await runCombined('v4', 'data', hooks());
+    expect(fixed.healthy, `v4 with working hooks failed:\n${fixed.log.join('\n')}`);
+    expect((await check()).wellFormed === 50, 'data lost');
+  },
+
+  /** The same hooks in the one-shot image, against CONVEX_URL. */
+  async hooksOneshot() {
+    const key = await startBackend();
+    const v1 = applyOneshot('v1', hooks());
+    expect(v1.status === 0, `one-shot v1 with hooks exited ${v1.status}:\n${v1.stdout}${v1.stderr}`);
+    const backendUrl = `http://${container('backend')}:3210`;
+    expectLines(
+      v1.stdout.split('\n'),
+      [`[hook] pre-push at ${backendUrl}: recorded version none`, 'push: pushed', `[hook] post-apply at ${backendUrl}: recorded version 1.0.0`, 'deployed'],
+      'one-shot v1',
+    );
+    expect(!`${v1.stdout}${v1.stderr}`.includes(key), 'the admin key is in the one-shot output');
+    await write('v1', 50, key);
+    const failed = applyOneshot('v4', hooks({ postApply: 'fail' }));
+    expect(failed.status === 1, `a failing post-apply hook should exit 1, got ${failed.status}`);
+    expectLines(failed.stdout.split('\n'), ['pass 2 (validation on): pushed', 'deploy failed: post-apply hook failed (exit 3)'], 'one-shot v4');
+    expect((await getEnv('CONVEX_RELEASE_VERSION', key)) === '4.0.0', 'one-shot v4 did not record its version');
+    log('  one-shot: hooks get CONVEX_URL; a failing post-apply hook exits 1');
+  },
+
+  /** CONVEX_RELEASE_BACKUP_DIR: an export per upgrade with pending migrations, the newest KEEP kept. */
+  async backup() {
+    expect((await runCombined('v1', 'data', backups(2))).healthy, 'v1 failed');
+    await write('v1', 100);
+    const taken: string[] = [];
+    for (const [version, from] of [
+      ['v2', '1.0.0'],
+      ['v3', '2.0.0'],
+    ] as const) {
+      const run = await runCombined(version, 'data', backups(2));
+      expect(run.healthy, `${version} failed:\n${run.log.join('\n')}`);
+      const wrote = run.log.find((l) => l.includes('backup: wrote '));
+      expect(Boolean(wrote?.endsWith(`-${from}-to-${version[1]}.0.0.zip`)), `${version}: no backup from ${from}:\n${run.log.join('\n')}`);
+      expectLines(run.log, ['backup: wrote', 'pass 1 (validation off): pushed'], `${version} order`);
+      taken.push(wrote!.split('backup: wrote ')[1]!);
+    }
+    const again = await runCombined('v3', 'data', backups(2));
+    expect(again.healthy && !again.log.some((l) => l.includes('backup:')), `a restart without pending migrations took a backup:\n${again.log.join('\n')}`);
+    const v4 = await runCombined('v4', 'data', backups(2));
+    expect(v4.healthy, `v4 failed:\n${v4.log.join('\n')}`);
+    expectLines(v4.log, [`backup: deleted ${taken[0]} (CONVEX_RELEASE_BACKUP_KEEP=2)`], 'rotation');
+    const files = listBackups();
+    expect(files.length === 2 && files[0] === taken[1] && files[1]!.endsWith('-3.0.0-to-4.0.0.zip'), `backups: ${files.join(', ')}`);
+    const key = adminKey();
+    expect((await getEnv('CONVEX_RELEASE_VERSION', key)) === '4.0.0' && (await getEnv('CONVEX_RELEASE_BACKUP', key)) === undefined, 'records after v4');
+    log(`  ${files.join(', ')}; no backup without pending migrations`);
+  },
+
+  /**
+   * A migration fails and the container restarts, then a fix release fails too: five attempts on one
+   * backup, which KEEP=3 never rotates out. The DC-1 case of omnarr's D7 review.
+   */
+  async crashLoop() {
+    await runCombined('v1', 'data');
+    await write('v1', 300);
+    expect((await runCombined('v2', 'data')).healthy, 'v2 failed');
+    // Three earlier upgrades' backups.
+    inBackups('for f in 20240101-000000-0.1.0-to-0.2.0 20250101-000000-0.2.0-to-0.3.0 20250601-000000-0.3.0-to-1.0.0; do echo old > /backups/$f.zip; done');
+    await setEnv('FAIL_AT', 'user150');
+    let clean = '';
+    let hash = '';
+    for (const [attempt, version] of ['v4', 'v4', 'v4', 'v5', 'v5'].entries()) {
+      const run = await runCombined(version, 'data', backups(3));
+      expect(!run.healthy && run.exitCode === 1, `${version} attempt ${attempt + 1} should fail, got exit ${run.exitCode}:\n${run.log.join('\n')}`);
+      expect(
+        run.log.some((l) => l.includes('FAIL_AT reached')),
+        `attempt ${attempt + 1} failed for another reason:\n${run.log.join('\n')}`,
+      );
+      if (attempt === 0) {
+        clean = run.log.find((l) => l.includes('backup: wrote '))!.split('backup: wrote ')[1]!;
+        expect(clean.endsWith('-2.0.0-to-4.0.0.zip'), `first backup: ${clean}`);
+        hash = backupHash(clean);
+      } else {
+        expectLines(run.log, [`backup: reusing ${clean}, taken before an earlier attempt at this upgrade`], `attempt ${attempt + 1}`);
+      }
+    }
+    const files = listBackups();
+    expect(
+      JSON.stringify(files) === JSON.stringify(['20250101-000000-0.2.0-to-0.3.0.zip', '20250601-000000-0.3.0-to-1.0.0.zip', clean]),
+      `after five attempts: ${files.join(', ')}`,
+    );
+    expect(backupHash(clean) === hash, 'the clean backup changed');
+    log(`  5 failed attempts (3x v4, 2x v5): one backup, ${clean}, unchanged`);
+
+    await bareBackend('v5');
+    await setEnv('FAIL_AT', null);
+    const fixed = await runCombined('v5', 'data', backups(3));
+    expect(fixed.healthy, `v5 didn't recover:\n${fixed.log.join('\n')}`);
+    const key = adminKey();
+    expect((await getEnv('CONVEX_RELEASE_VERSION', key)) === '5.0.0', 'CONVEX_RELEASE_VERSION after the fix');
+    expect((await getEnv('CONVEX_RELEASE_BACKUP', key)) === undefined, 'CONVEX_RELEASE_BACKUP not cleared after success');
+    expect(listBackups().length === 3 && (await check(key)).wellFormed === 300, 'data or backups after the fix');
+    log('  v5 succeeds once fixed: version 5.0.0 recorded, backup record cleared');
+  },
+
+  /** A backup taken before an upgrade restores the data and the components' tables through CONVEX_RELEASE_SNAPSHOT. */
+  async restore() {
+    await runCombined('v1', 'data');
+    await write('v1', 120);
+    expect((await runCombined('v2', 'data')).healthy, 'v2 failed');
+    const upgraded = await runCombined('v4', 'data', backups());
+    expect(upgraded.healthy, `v4 failed:\n${upgraded.log.join('\n')}`);
+    const file = listBackups()[0]!;
+    expect(file.endsWith('-2.0.0-to-4.0.0.zip'), `backup: ${file}`);
+
+    // CUJ 7 of omnarr's D7: back to v2 on an empty volume, from the export taken before v4.
+    const restored = await runCombined('v2', 'restored', ['-v', `${BACKUPS}:/backups:ro`, '-e', `CONVEX_RELEASE_SNAPSHOT=/backups/${file}`]);
+    expect(restored.healthy, `restore failed:\n${restored.log.join('\n')}`);
+    expectLines(restored.log, [`imported ${file}`], 'import');
+    const key = adminKey();
+    expect((await tableSize('messages', key)) === 120, 'restored message count');
+    const records = await call<{ name: string; isDone: boolean }[]>('lib:getStatus', { limit: 100 }, key, URL, 'migrations');
+    expect(
+      records.length === 1 && records[0]!.name === 'migrations/0001_rename_body_to_text' && records[0]!.isDone,
+      `the migrations component's records: ${JSON.stringify(records)}`,
+    );
+    expect((await getEnv('CONVEX_RELEASE_VERSION', key)) === '2.0.0' && (await getEnv('CONVEX_RELEASE_BACKUP', key)) === undefined, 'records after restore');
+    log('  v2 restored from the backup: 120 messages, migration 0001 recorded as done');
+
+    // The restored deployment upgrades again, as the original did.
+    const again = await runCombined('v4', 'restored');
+    expect(again.healthy && (await check()).wellFormed === 120, `upgrading the restored deployment failed:\n${again.log.join('\n')}`);
+    log('  and upgrades to v4 again');
+  },
+
   /** `check`, `dev` and `deploy` from a checkout, against a running v4. */
   async predeployCli() {
     const v4 = await runCombined('v4', 'data');
@@ -678,7 +921,10 @@ const tarballs: Tarballs = {
   '@dev-marzahn/convex-release': packTarball('packages/convex-release'),
   'predeploy-fixture': packTarball('e2e/libs/predeploy-fixture'),
 };
-const oneshot = new Set([...(selected.includes('oneshot') ? ['v1', 'v4'] : []), ...(selected.includes('predeployOneshot') ? ['v4', 'v5'] : [])]);
+const oneshot = new Set([
+  ...(selected.includes('oneshot') || selected.includes('hooksOneshot') ? ['v1', 'v4'] : []),
+  ...(selected.includes('predeployOneshot') ? ['v4', 'v5'] : []),
+]);
 for (const version of ['v1', 'v2', 'v3', 'v4', 'v5']) {
   buildApp(version, 'combined', tarballs);
   if (oneshot.has(version)) buildApp(version, 'oneshot', tarballs);

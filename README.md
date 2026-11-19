@@ -32,6 +32,7 @@ The images do the same when a self-hosted container starts, so someone who runs 
 - **Downgrade protection.** A deploy stops before pushing anything when the deployment has finished a migration your checkout doesn't have.
 - **Typed seeding.** `defineSeed` fills an empty deployment with [Faker](https://fakerjs.dev) data typed by your schema.
 - **Self-hosted images.** Your `Dockerfile` is one `FROM` line, and the container reports healthy once the data matches the schema. A one-shot variant deploys to a backend in another container and exits.
+- **Hooks and backups.** The images can run your commands before the first push and after the release, and export the deployment before they migrate it.
 - **Preview environments.** A preview container can seed itself, import a `convex export` snapshot, or reset when a branch renumbers a migration.
 - **CI checks.** `verify` fails a pull request that removes or renumbers a shipped migration. `test-upgrade` upgrades the previous image's data to the new one in throwaway containers.
 
@@ -180,7 +181,7 @@ A table seed writes 100 documents per transaction (`batchSize` changes that), an
 3. Run the pending migrations until they finish.
 4. Push again with validation on. The backend checks every document against the schema and rejects the push if one doesn't match.
 
-Step 1 stops when a newer version of your app ran migrations this one lacks, or someone renamed or renumbered a finished migration, or a predeploy check fails. It also stops when it can't read what the deployment has recorded. When a version has no migration files at all, the images push once, with validation on; `dev` and `deploy` still push twice.
+Step 1 stops when a newer version of your app ran migrations this one lacks, or someone renamed or renumbered a finished migration, or a predeploy check fails. It also stops when it can't read what the deployment has recorded. When a version has no migration files at all, the images push once, with validation on; `dev` and `deploy` still push twice. The images can also take a backup and run your hooks around these steps; see [Settings](#settings).
 
 If a migration throws, the deploy stops during step 3, skips step 4 and reports the error. Your new code stays deployed with validation off. Fix the cause in the same file and deploy again: the migration continues from the batch that failed. A renamed file starts over as a new migration, and the old one stays recorded as failed.
 
@@ -255,7 +256,7 @@ volumes:
 
 To upgrade, change the tag and run `docker compose up -d`. A tag older than the data makes the container exit before it pushes anything; go back to the newer tag. A failing [predeploy check](#predeploy-checks) does the same. Once you've confirmed the release is safe anyway, set `CONVEX_RELEASE_SKIP_CHECKS` to the package names to skip, comma-separated.
 
-If a migration throws in the container, the container stops its backend and exits with code 1, and `restart: unless-stopped` retries it on every start. Unlike with `convex-release deploy`, your whole app is down until a start succeeds, not just the new code. The logs show `[convex-release] deploy failed:` with the error; fix the migration in the same file and ship a new tag.
+If a migration throws in the container, the container stops its backend and exits with code 1, and `restart: unless-stopped` retries it on every start. Unlike with `convex-release deploy`, your whole app is down until a start succeeds, not just the new code. The logs show `[convex-release] deploy failed:` with the error; fix the migration in the same file and ship a new tag. To have a copy of the data from before the upgrade, set [`CONVEX_RELEASE_BACKUP_DIR`](#backups).
 
 ### One-shot image
 
@@ -311,11 +312,103 @@ FROM ghcr.io/dev-marzahn/convex-release:100.1.0-runtime
 COPY --from=bundle /convex/app/ /convex/app/
 ```
 
+### Settings
+
+Both images read these from the container's environment. All are optional.
+
+| Variable                         | Effect                                                                                                                         |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `CONVEX_RELEASE_PRE_PUSH`        | A command to run before the first push. See [Hooks](#hooks).                                                                   |
+| `CONVEX_RELEASE_POST_APPLY`      | A command to run after the release is applied, before the container reports ready. See [Hooks](#hooks).                        |
+| `CONVEX_RELEASE_BACKUP_DIR`      | A folder to export the deployment to before migrating. See [Backups](#backups).                                                |
+| `CONVEX_RELEASE_BACKUP_KEEP`     | How many backups to keep in that folder: a whole number, 1 or more. Default 3.                                                 |
+| `CONVEX_RELEASE_SKIP_CHECKS`     | Package names, comma-separated, whose [predeploy checks](#predeploy-checks) don't run.                                         |
+| `CONVEX_RELEASE_SNAPSHOT`        | A `convex export` zip to import into an empty deployment: a [restore](#backups), or a [preview's](#preview-environments) data. |
+| `CONVEX_RELEASE_SEED`            | `true` seeds an empty deployment. For [previews](#preview-environments).                                                       |
+| `CONVEX_RELEASE_ON_DOWNGRADE`    | `reset` deletes the data instead of refusing an older release. For [previews](#preview-environments).                          |
+| `CONVEX_URL`, `CONVEX_ADMIN_KEY` | The [one-shot image's](#one-shot-image) backend, and an admin key for it.                                                      |
+
+A container started with an invalid setting, such as `CONVEX_RELEASE_BACKUP_KEEP=0`, exits with code 1 before it changes anything.
+
+On every start, the images run these steps in order. Any failure stops the start there:
+
+1. Wait for the backend to answer.
+2. Refuse a release older than the data, then run the predeploy checks.
+3. Take a backup, if `CONVEX_RELEASE_BACKUP_DIR` is set and migrations are pending.
+4. Run the pre-push hook.
+5. Push with validation off. With `CONVEX_RELEASE_SNAPSHOT`, import the snapshot into an empty deployment.
+6. Run the migrations, then push with validation on.
+7. Record the release's version in the deployment (see [The applied version](#the-applied-version)).
+8. With `CONVEX_RELEASE_SEED`, run the seeds on an empty deployment.
+9. Run the post-apply hook.
+10. The combined container reports ready; the one-shot container exits with code 0.
+
+### Hooks
+
+`CONVEX_RELEASE_PRE_PUSH` and `CONVEX_RELEASE_POST_APPLY` name commands for both images to run at steps 4 and 9 above. Use the pre-push hook for deployment variables your functions need from their first push, and the post-apply hook for anything that needs the new functions, such as reference data:
+
+```yaml
+environment:
+  CONVEX_RELEASE_PRE_PUSH: node /app/hooks.mjs pre-push
+  CONVEX_RELEASE_POST_APPLY: node /app/hooks.mjs post-apply
+```
+
+- Each command runs with `sh -c`, and inherits the container's environment and output.
+- Each command also gets two variables:
+  - `CONVEX_URL`: the deployment's URL. That's `http://127.0.0.1:<PORT>` in the combined image, and the one-shot image's own `CONVEX_URL`.
+  - `CONVEX_ADMIN_KEY`: an admin key for that deployment, the key the image uses.
+- With them, a hook can call the deployment's HTTP API with the header `Authorization: Convex <key>`. Both images have Node, so a hook can be a script that `node` runs.
+- A hook that exits with any other code than 0 fails the start, like a failed migration. The log shows `[convex-release] deploy failed: pre-push hook failed (exit 1)`. The combined container stops its backend and exits with code 1 without reporting ready, and the one-shot container exits with code 1.
+- The hooks run on every start, so make them safe to repeat.
+- The log names each hook as it runs, but never its command or the variables it gets. Don't print the admin key from your hook.
+
+### Backups
+
+With `CONVEX_RELEASE_BACKUP_DIR` set, both images export the deployment before they migrate it. They do this when migrations are pending and the app's tables hold data. Mount a volume or a host folder at that path:
+
+```yaml
+environment:
+  CONVEX_RELEASE_BACKUP_DIR: /backups
+volumes:
+  - ./backups:/backups
+```
+
+- **File name:** `<UTC yyyymmdd-hhmmss>-<from>-to-<to>.zip`, for example `20261118-090503-1.3.0-to-1.4.0.zip`.
+  - `<from>` is the [version](#the-applied-version) the deployment last applied, or `unknown` before one is recorded.
+  - `<to>` is this image's version, or `unknown` when your `package.json` has none.
+- **Format:** a `convex export` that includes file storage, the format `CONVEX_RELEASE_SNAPSHOT` imports. The image downloads it to `<file>.partial`, and renames it once the download is complete.
+- **Retention:** after writing a new backup, the image keeps the newest `CONVEX_RELEASE_BACKUP_KEEP` (default 3) and deletes the older ones. It only deletes files named like its backups; it leaves anything else in the folder alone.
+- **A failed backup** stops the start before anything is pushed, with `[convex-release] deploy failed: backup failed: <reason>`. The usual cause is a full disk. The backend writes the export to its own storage before the image downloads it, so the backend's volume needs room too.
+- **One backup per upgrade, however many attempts it takes.**
+  - After a backup, the deployment records the file's name in its variable `CONVEX_RELEASE_BACKUP`.
+  - Every start reuses that backup, until a release applies successfully and clears the record.
+  - So a migration that fails in a restart loop never adds backups of half-migrated data. Neither does a fix release you ship while it fails. And retention never deletes the backup taken before the first attempt.
+  - If the recorded file is gone from the folder, or never finished downloading, the next attempt takes a new backup.
+- **Secrets:** a backup holds all your data, secrets included, in plain text. Keep the folder private, and copy backups off the host.
+
+To restore a backup, start the image on an empty volume with `CONVEX_RELEASE_SNAPSHOT=/backups/<file>`. Once the container is up, remove the setting.
+
+- To go back to the release the backup was taken from, use the `<from>` version's image.
+- To retry the upgrade, use the newer image. It runs the migrations again.
+- The image only imports into an empty deployment, so a forgotten setting does nothing on later starts.
+- Deployment variables aren't part of an export. Set yours again; a pre-push hook does that on every start.
+- The import also clears `CONVEX_RELEASE_VERSION` and `CONVEX_RELEASE_BACKUP`, which described the data it replaced.
+
+### The applied version
+
+After step 6, both images record your `package.json` `version` in the deployment variable `CONVEX_RELEASE_VERSION`, carried in the image's `release.json`. If the app has no `version`, the variable is removed.
+
+- Your functions read it as `process.env.CONVEX_RELEASE_VERSION`, for example to show the running release or to compare it with the latest one.
+- A pre-push hook sees the previous release's version there, and a post-apply hook sees the new one.
+- `convex-release deploy` and `dev` don't set it.
+
+Give each release you ship its own version: the backups are named by it.
+
 ## Preview environments
 
 This section covers previews that run your self-hosted image per pull request, each on its own volume. For a Convex Cloud preview deployment, seed it with `convex-release seed --deployment <name>`.
 
-Three settings on the container are meant for previews; leave all three unset in production:
+Three settings on the container are meant for previews. Leave all three unset in production, except `CONVEX_RELEASE_SNAPSHOT` while you [restore a backup](#backups):
 
 | Variable                            | Effect                                                                                                                                                        |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |

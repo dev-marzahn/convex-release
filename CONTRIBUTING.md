@@ -17,12 +17,12 @@ The repo uses [Vite+](https://viteplus.dev): `vp check` runs Oxfmt, Oxlint and t
 
 ## Repository
 
-| Path                      | Contents                                                                                                                                         |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `packages/convex-release` | The npm package: the CLI, the libraries the generated migrations and seeds files import, and the release images' entrypoint.                     |
-| `images/`                 | The Dockerfile for the release images and the build step they run in an app's build.                                                             |
-| `examples/basic`          | An app with three migrations and two seeds.                                                                                                      |
-| `e2e/`                    | Fixture apps v1 to v5, a fixture library with a predeploy check, and the script that builds them from the images and upgrades them on real data. |
+| Path                      | Contents                                                                                                                                                        |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/convex-release` | The npm package: the CLI, the libraries the generated migrations and seeds files import, and the release images' entrypoint.                                    |
+| `images/`                 | The Dockerfile for the release images and the build step they run in an app's build.                                                                            |
+| `examples/basic`          | An app with three migrations and two seeds.                                                                                                                     |
+| `e2e/`                    | Fixture apps v1 to v5, a fixture library with a predeploy check, a hook script, and the script that builds them from the images and upgrades them on real data. |
 
 ## End-to-end tests
 
@@ -31,7 +31,9 @@ bun run e2e                 # all scenarios, a few minutes
 bun run e2e steps oneshot   # only the named scenarios
 ```
 
-The script builds the package and the base images, builds the fixture apps from them, and upgrades v1 through v4 on one volume. It uses v5 for the predeploy check scenarios.
+The script builds the package and the base images, builds the fixture apps from them, and upgrades v1 through v4 on one volume. It uses v5 for the predeploy check scenarios, and as the fix release in the crash-loop scenario. The hook scenarios mount `e2e/hooks.mjs` into the containers; the backup scenarios keep their backups on a Docker volume.
+
+The images' start-up sequence lives in `src/image/apply.ts`, with the steps injected, so its unit tests cover the order and both modes without Docker. `src/image/entrypoint.ts` implements those steps as HTTP calls to the backend, which only the end-to-end tests cover.
 
 ## Pull requests
 

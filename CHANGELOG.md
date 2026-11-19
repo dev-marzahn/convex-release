@@ -4,6 +4,11 @@ This project follows [Epoch Semantic Versioning](https://antfu.me/posts/epoch-se
 
 ## Unreleased
 
+- Hooks: `CONVEX_RELEASE_PRE_PUSH` and `CONVEX_RELEASE_POST_APPLY` name commands for both images to run, before the first push and before the container reports ready. Each gets the deployment's `CONVEX_URL` and `CONVEX_ADMIN_KEY`. A hook that exits with a non-zero code fails the start, like a failed migration.
+- Backups: with `CONVEX_RELEASE_BACKUP_DIR` set, both images export the deployment before they migrate it, and keep the newest `CONVEX_RELEASE_BACKUP_KEEP` (default 3). Every attempt at one upgrade reuses the same backup, including a fix release shipped while the upgrade fails, so a restart loop can't rotate out the backup from before the upgrade. A failed backup stops the start before anything is pushed. Restore a backup through `CONVEX_RELEASE_SNAPSHOT`.
+- The images record the app's `package.json` version in the deployment variable `CONVEX_RELEASE_VERSION`. `bundle` writes it into `release.json`.
+- An invalid setting stops a container before it changes anything.
+
 ## 100.1.0 (2026-11-15)
 
 - Predeploy checks: a dependency can declare `convex-release.predeploy` in its `package.json`. `deploy`, both images and the first push of `dev` run that check before anything is pushed, and a failed check refuses the release. `check` reports the checks. `--skip-check` and `CONVEX_RELEASE_SKIP_CHECKS` skip a named check. Library authors can import the check types from `@dev-marzahn/convex-release`.

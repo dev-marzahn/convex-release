@@ -36,8 +36,10 @@ test('writes a strict and a validation-off push request that differ only in the 
   expect(strict.appDefinition.changedModules.map((m) => m.path)).toContain('seeds/_generated.js');
   expect(relaxed.appDefinition.changedModules).toEqual(strict.appDefinition.changedModules);
 
-  const manifest = JSON.parse(readFileSync(join(out, 'release.json'), 'utf8')) as { migrations: string[]; seeds: boolean };
+  const manifest = JSON.parse(readFileSync(join(out, 'release.json'), 'utf8')) as { version?: string; migrations: string[]; seeds: boolean };
   expect(manifest).toEqual({
+    // The app's package.json version, which the images record on the deployment.
+    version: '1.0.0',
     migrations: ['migrations/0001_rename_body_to_text', 'migrations/0002_add_length', 'migrations/0003_author_to_users'],
     seeds: true,
   });

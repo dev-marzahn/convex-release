@@ -30,6 +30,11 @@ export interface BundleResult {
 
 /** `release.json`: what the entrypoint checks before it pushes anything. */
 export interface ReleaseManifest {
+  /**
+   * The app's package.json `version`, absent when it has none. The images
+   * record it on the deployment as `CONVEX_RELEASE_VERSION` once applied.
+   */
+  version?: string;
   /** Every migration this release knows, oldest first, as the component names them. */
   migrations: string[];
   /** Whether `seeds/_generated:run` exists, for `CONVEX_RELEASE_SEED`. */
@@ -93,7 +98,10 @@ export async function bundle(project: Project, outDir: string, options: BundleCh
   const { migrations, seeds } = writeGenerated(project);
   mkdirSync(outDir, { recursive: true });
   const checks = await bundleChecks(project, outDir, options);
+  const packageFile = join(project.root, 'package.json');
+  const { version } = (existsSync(packageFile) ? JSON.parse(readFileSync(packageFile, 'utf8')) : {}) as { version?: unknown };
   const manifest: ReleaseManifest = {
+    ...(typeof version === 'string' && version ? { version } : {}),
     migrations: migrations.map((m) => functionName(m.module)),
     seeds: (seeds?.length ?? 0) > 0,
     ...(checks ? { checks } : {}),

@@ -1,5 +1,6 @@
 {
   "name": "e2e-app-v5",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "dependencies": {

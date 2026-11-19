@@ -2,12 +2,22 @@
 // Entrypoint of the release images. Applies the push requests baked into the
 // image (written by `convex-release bundle` at build time) in the same three
 // steps as `convex-release deploy`: push with schema validation off, run the
-// pending migrations, push with validation on.
+// pending migrations, push with validation on. ./apply.ts orders the steps;
+// this file makes them HTTP calls to the backend and runs the process.
 //
 // Two modes:
 //   combined: starts the backend in this container (./run_backend.sh), applies
 //             the release, then keeps running it. Ready once applied.
 //   one-shot: CONVEX_URL is set; applies the release to that backend and exits.
+//
+// For any installation:
+//   CONVEX_RELEASE_PRE_PUSH=<command>      run before the first push, and
+//   CONVEX_RELEASE_POST_APPLY=<command>    after the release, before ready
+//                                          (`sh -c`, with CONVEX_URL and
+//                                          CONVEX_ADMIN_KEY in the environment);
+//   CONVEX_RELEASE_BACKUP_DIR=<folder>     export the deployment there before
+//                                          migrating; CONVEX_RELEASE_BACKUP_KEEP
+//                                          (default 3) are kept.
 //
 // For previews, three opt-in settings:
 //   CONVEX_RELEASE_SNAPSHOT=<path or URL>  import a `convex export` zip into an
@@ -32,6 +42,7 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { Readable } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -46,6 +57,9 @@ import {
   type CollectedCheck,
   type PredeployTransport,
 } from '../predeploy.ts';
+import { modeFromEnv, readSettings, run, type Deployment, type Mode, type Settings } from './apply.ts';
+import type { ExportStream } from './backup.ts';
+import { runHook } from './hooks.ts';
 
 const START = 'migrations/_generated:start';
 const STATUS = 'migrations/_generated:status';
@@ -54,8 +68,6 @@ const PUSH_FILE = process.env.CONVEX_RELEASE_PUSH ?? '/convex/app/push.json';
 const RELAXED_FILE = PUSH_FILE.replace(/\.json$/, '.relaxed.json');
 const MANIFEST_FILE = PUSH_FILE.replace(/[^/]+$/, 'release.json');
 const READY_FILE = process.env.CONVEX_RELEASE_READY_FILE ?? '/tmp/convex-ready';
-const SNAPSHOT = process.env.CONVEX_RELEASE_SNAPSHOT || undefined;
-const SEED_ON_EMPTY = /^(1|true|yes)$/i.test(process.env.CONVEX_RELEASE_SEED ?? '');
 const ON_DOWNGRADE = process.env.CONVEX_RELEASE_ON_DOWNGRADE ?? 'refuse';
 const SKIP_CHECKS = parseSkipList(process.env.CONVEX_RELEASE_SKIP_CHECKS);
 /** Installed next to this file in the images. */
@@ -71,6 +83,7 @@ interface ReleaseStatus {
 }
 
 interface Manifest {
+  version?: string;
   migrations: string[];
   seeds?: boolean;
   /** By package name; `module` is relative to release.json. */
@@ -197,21 +210,21 @@ function readManifest(): Manifest | undefined {
  * snapshot import, a newer snapshot is deleted again before the error, so the
  * next start imports whatever CONVEX_RELEASE_SNAPSHOT points to by then.
  */
-async function checkDowngrade(url: string, key: string, after: 'start' | 'snapshot' = 'start') {
+async function checkDowngrade(url: string, key: string, after: 'start' | 'snapshot'): Promise<boolean> {
   const manifest = readManifest();
-  if (!manifest) return;
+  if (!manifest) return false;
   const known = new Set(manifest.migrations);
   const unknown = (await recordedMigrations(url, key)).filter((s) => !known.has(s.name));
   if (after === 'start' && ON_DOWNGRADE === 'reset' && unknown.length > 0) {
     log(`the data has migrations this release doesn't (${unknown.map((s) => s.name).join(', ')}); CONVEX_RELEASE_ON_DOWNGRADE=reset: deleting all data`);
     await importZip(url, key, emptyZip(), 'an empty snapshot');
-    return;
+    return true;
   }
   const newer = unknown
     .filter((s) => s.isDone)
     .map((s) => s.name)
     .join(', ');
-  if (!newer) return;
+  if (!newer) return false;
   if (after === 'snapshot') {
     await importZip(url, key, emptyZip(), 'an empty snapshot');
     throw new Error(
@@ -358,23 +371,72 @@ async function importZip(url: string, key: string, zip: Buffer, label: string) {
   }
 }
 
-async function apply(url: string, key: string) {
-  await waitForBackend(url);
-  await checkDowngrade(url, key);
-  await predeployChecks(url, key);
-  const strict = JSON.parse(readFileSync(PUSH_FILE, 'utf8')) as object;
-  const relaxed = existsSync(RELAXED_FILE) ? (JSON.parse(readFileSync(RELAXED_FILE, 'utf8')) as object) : undefined;
-  await push(url, key, relaxed ?? strict, relaxed ? 'pass 1 (validation off)' : 'push');
-  if (SNAPSHOT && (await isEmpty(url, key))) {
-    // After pass 1, so the migrations component exists to take its records.
-    await importZip(url, key, await readSnapshot(SNAPSHOT), SNAPSHOT.split('/').at(-1)!);
-    await checkDowngrade(url, key, 'snapshot');
+/** The release's migrations the deployment hasn't finished. */
+async function pendingMigrations(url: string, key: string): Promise<number> {
+  const manifest = readManifest();
+  if (!manifest) return 0;
+  const done = new Set((await recordedMigrations(url, key)).filter((s) => s.isDone).map((s) => s.name));
+  return manifest.migrations.filter((name) => !done.has(name)).length;
+}
+
+interface SnapshotExport {
+  _id: string;
+  state: 'requested' | 'in_progress' | 'completed' | 'failed' | 'canceled';
+  start_ts?: string;
+  size?: string;
+  progress_message?: string;
+}
+
+/** `convex export --include-file-storage`, over the same HTTP API the CLI uses, as a download stream. */
+async function exportZip(url: string, key: string): Promise<ExportStream> {
+  const latest = () => call<SnapshotExport | null>(url, key, '_system/cli/exports:getLatest', {}, '/api/query');
+  const before = (await latest())?._id;
+  await request(url, '/api/export/request/zip?includeStorage=true', key);
+  let last = '';
+  for (;;) {
+    const e = await latest();
+    if (e && e._id !== before) {
+      if (e.state === 'completed') {
+        const res = await fetch(`${url}/api/export/zip/${e.start_ts}`, { headers: { 'Convex-Client': 'convex-release', Authorization: `Convex ${key}` } });
+        if (!res.ok || !res.body) throw new Error(`/api/export/zip: HTTP ${res.status}: ${(await res.text()).slice(0, 2000)}`);
+        return {
+          body: Readable.fromWeb(res.body as import('node:stream/web').ReadableStream<Uint8Array>),
+          size: e.size === undefined ? undefined : Number(e.size),
+        };
+      }
+      if (e.state === 'failed' || e.state === 'canceled') throw new Error(`the backend's export ${e.state}`);
+      const line = e.progress_message ?? '';
+      if (line && line !== last) log(`backup: ${(last = line)}`);
+    }
+    await sleep(POLL_MS);
   }
-  if (relaxed) {
-    await runMigrations(url, key);
-    await push(url, key, strict, 'pass 2 (validation on)');
-  }
-  if (SEED_ON_EMPTY) await seed(url, key);
+}
+
+/** The steps of ./apply.ts as HTTP calls to the backend at `url`. */
+function httpDeployment(url: string, key: string, settings: Settings): Deployment {
+  const read = (file: string) => JSON.parse(readFileSync(file, 'utf8')) as object;
+  return {
+    waitUntilUp: () => waitForBackend(url),
+    checkDowngrade: (after) => checkDowngrade(url, key, after),
+    predeployChecks: () => predeployChecks(url, key),
+    pendingMigrations: () => pendingMigrations(url, key),
+    isEmpty: () => isEmpty(url, key),
+    async getVariable(name) {
+      const variable = await call<{ value: string } | null>(url, key, '_system/cli/queryEnvironmentVariables:get', { name }, '/api/query');
+      return variable?.value;
+    },
+    async setVariables(changes) {
+      await post(url, '/api/update_environment_variables', { changes: Object.entries(changes).map(([name, value]) => ({ name, value })) }, key);
+    },
+    exportZip: () => exportZip(url, key),
+    push: (kind, label) => push(url, key, read(kind === 'relaxed' ? RELAXED_FILE : PUSH_FILE), label),
+    async importSnapshot() {
+      const source = settings.snapshot!;
+      await importZip(url, key, await readSnapshot(source), source.split('/').at(-1)!);
+    },
+    migrate: () => runMigrations(url, key),
+    seed: () => seed(url, key),
+  };
 }
 
 async function seed(url: string, key: string) {
@@ -391,7 +453,8 @@ function lastLine(output: string): string {
   return output.trim().split('\n').at(-1) ?? '';
 }
 
-async function oneShot(url: string) {
+function adminKey(mode: Mode): string {
+  if (mode.kind === 'combined') return lastLine(execFileSync('./generate_admin_key.sh', { encoding: 'utf8' }));
   // The backend's own credentials derive the admin key, so the release needs
   // nothing beyond what the backend container already has.
   const name = process.env.INSTANCE_NAME;
@@ -399,43 +462,43 @@ async function oneShot(url: string) {
   const key =
     process.env.CONVEX_ADMIN_KEY ?? (name && secret ? lastLine(execFileSync('/convex/generate_key', [name, secret], { encoding: 'utf8' })) : undefined);
   if (!key) throw new Error("Set INSTANCE_NAME and INSTANCE_SECRET (the backend's), or CONVEX_ADMIN_KEY.");
-  log(`deploying to ${url}`);
-  await apply(url.replace(/\/+$/, ''), key);
-  log('deployed');
+  return key;
 }
 
-function combined() {
-  rmSync(READY_FILE, { force: true });
-  const backend: ChildProcess = spawn('./run_backend.sh', { stdio: 'inherit' });
-  let failed = false;
-  for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => backend.kill(sig));
-  backend.on('exit', (code, signal) => {
-    log(`backend exited (${signal ?? code})`);
-    process.exit(failed ? 1 : (code ?? 1));
-  });
-  const key = lastLine(execFileSync('./generate_admin_key.sh', { encoding: 'utf8' }));
-  apply(`http://127.0.0.1:${process.env.PORT ?? 3210}`, key)
-    .then(() => {
-      writeFileSync(READY_FILE, new Date().toISOString());
-      log('ready');
-    })
-    .catch((err: unknown) => {
-      failed = true;
-      logFailure(err);
-      backend.kill('SIGINT');
-      setTimeout(() => process.exit(1), 10_000).unref();
-    });
-}
-
-if (process.env.CONVEX_URL) {
-  oneShot(process.env.CONVEX_URL).catch((err: unknown) => {
-    logFailure(err);
-    process.exit(1);
-  });
-} else if (!existsSync('./run_backend.sh')) {
-  // The one-shot image has no backend of its own.
-  log('deploy failed: set CONVEX_URL to the backend this image deploys to.');
+let mode: Mode;
+let settings: Settings;
+try {
+  settings = readSettings(process.env);
+  mode = modeFromEnv(process.env, existsSync('./run_backend.sh'));
+} catch (err) {
+  logFailure(err);
   process.exit(1);
-} else {
-  combined();
 }
+
+let backend: ChildProcess | undefined;
+let failed = false;
+run(mode, settings, {
+  release: { version: readManifest()?.version, relaxed: existsSync(RELAXED_FILE) },
+  startBackend() {
+    const child = spawn('./run_backend.sh', { stdio: 'inherit' });
+    backend = child;
+    for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => child.kill(sig));
+    child.on('exit', (code, signal) => {
+      log(`backend exited (${signal ?? code})`);
+      process.exit(failed ? 1 : (code ?? 1));
+    });
+  },
+  removeReady: () => rmSync(READY_FILE, { force: true }),
+  writeReady: () => writeFileSync(READY_FILE, new Date().toISOString()),
+  adminKey,
+  deployment: (url, key) => httpDeployment(url, key, settings),
+  runHook,
+  log,
+  now: () => new Date(),
+}).catch((err: unknown) => {
+  failed = true;
+  logFailure(err);
+  if (!backend) process.exit(1);
+  backend.kill('SIGINT');
+  setTimeout(() => process.exit(1), 10_000).unref();
+});
