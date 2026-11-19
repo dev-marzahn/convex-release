@@ -86,7 +86,7 @@
     },
     "packages/convex-release": {
       "name": "@dev-marzahn/convex-release",
-      "version": "100.2.0",
+      "version": "100.2.1",
       "bin": {
         "convex-release": "./dist/cli.mjs",
       },

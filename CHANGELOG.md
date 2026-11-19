@@ -4,6 +4,10 @@ This project follows [Epoch Semantic Versioning](https://antfu.me/posts/epoch-se
 
 ## Unreleased
 
+## 100.2.1 (2026-11-19)
+
+- The combined image starts on a fresh volume without `INSTANCE_SECRET`. It creates the backend's credentials once, before the backend starts, and derives the admin key from the same ones. Before, the backend and the admin key each created a different secret, so the first deploy failed with `BadAdminKey`, and the secret file on the volume could end up empty, which failed every later start with `Hex-decoded key was 0 bytes`.
+
 ## 100.2.0 (2026-11-19)
 
 - Hooks: `CONVEX_RELEASE_PRE_PUSH` and `CONVEX_RELEASE_POST_APPLY` name commands for both images to run, before the first push and before the container reports ready. Each gets the deployment's `CONVEX_URL` and `CONVEX_ADMIN_KEY`. A hook that exits with a non-zero code fails the start, like a failed migration.

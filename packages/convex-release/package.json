@@ -1,6 +1,6 @@
 {
   "name": "@dev-marzahn/convex-release",
-  "version": "100.2.0",
+  "version": "100.2.1",
   "description": "Versioned data migrations, seeding and self-hosted Docker images for Convex apps.",
   "keywords": [
     "cli",
