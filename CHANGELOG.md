@@ -4,6 +4,8 @@ This project follows [Epoch Semantic Versioning](https://antfu.me/posts/epoch-se
 
 ## Unreleased
 
+## 100.2.0 (2026-11-19)
+
 - Hooks: `CONVEX_RELEASE_PRE_PUSH` and `CONVEX_RELEASE_POST_APPLY` name commands for both images to run, before the first push and before the container reports ready. Each gets the deployment's `CONVEX_URL` and `CONVEX_ADMIN_KEY`. A hook that exits with a non-zero code fails the start, like a failed migration.
 - Backups: with `CONVEX_RELEASE_BACKUP_DIR` set, both images export the deployment before they migrate it, and keep the newest `CONVEX_RELEASE_BACKUP_KEEP` (default 3). Every attempt at one upgrade reuses the same backup, including a fix release shipped while the upgrade fails, so a restart loop can't rotate out the backup from before the upgrade. A failed backup stops the start before anything is pushed. Restore a backup through `CONVEX_RELEASE_SNAPSHOT`.
 - The images record the app's `package.json` version in the deployment variable `CONVEX_RELEASE_VERSION`. `bundle` writes it into `release.json`.
