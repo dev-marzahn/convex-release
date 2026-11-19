@@ -453,12 +453,29 @@ function lastLine(output: string): string {
   return output.trim().split('\n').at(-1) ?? '';
 }
 
+/**
+ * Runs the backend image's read_credentials.sh once and keeps the result in
+ * this process's environment, which run_backend.sh inherits. Its output is
+ * read here and never printed.
+ */
+function readCredentials() {
+  const out = execFileSync('bash', ['-c', 'source ./read_credentials.sh && printf "%s\\0%s" "$INSTANCE_NAME" "$INSTANCE_SECRET"'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  const [name, secret] = out.split('\0');
+  if (!name || !secret) throw new Error('read_credentials.sh gave no instance name or secret.');
+  process.env.INSTANCE_NAME = name;
+  process.env.INSTANCE_SECRET = secret;
+}
+
 function adminKey(mode: Mode): string {
-  if (mode.kind === 'combined') return lastLine(execFileSync('./generate_admin_key.sh', { encoding: 'utf8' }));
-  // The backend's own credentials derive the admin key, so the release needs
-  // nothing beyond what the backend container already has.
   const name = process.env.INSTANCE_NAME;
   const secret = process.env.INSTANCE_SECRET;
+  // Set by readCredentials(), the same ones the backend started with.
+  if (mode.kind === 'combined') return lastLine(execFileSync('./generate_key', [name!, secret!], { encoding: 'utf8' }));
+  // The backend's own credentials derive the admin key, so the release needs
+  // nothing beyond what the backend container already has.
   const key =
     process.env.CONVEX_ADMIN_KEY ?? (name && secret ? lastLine(execFileSync('/convex/generate_key', [name, secret], { encoding: 'utf8' })) : undefined);
   if (!key) throw new Error("Set INSTANCE_NAME and INSTANCE_SECRET (the backend's), or CONVEX_ADMIN_KEY.");
@@ -479,6 +496,7 @@ let backend: ChildProcess | undefined;
 let failed = false;
 run(mode, settings, {
   release: { version: readManifest()?.version, relaxed: existsSync(RELAXED_FILE) },
+  readCredentials,
   startBackend() {
     const child = spawn('./run_backend.sh', { stdio: 'inherit' });
     backend = child;

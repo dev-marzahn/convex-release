@@ -51,6 +51,12 @@ export function modeFromEnv(env: Record<string, string | undefined>, hasBackend:
 
 /** The container around the sequence. */
 export interface Host extends Pick<ApplyContext, 'release' | 'runHook' | 'log' | 'now'> {
+  /**
+   * Combined mode: creates the backend's credentials on a first start, or
+   * reads them, once. The backend and the admin key both use the result;
+   * creating them in each would race and give two different secrets.
+   */
+  readCredentials(): void;
   /** Combined mode: starts the backend in this container. */
   startBackend(): void;
   removeReady(): void;
@@ -67,6 +73,7 @@ export interface Host extends Pick<ApplyContext, 'release' | 'runHook' | 'log' |
 export async function run(mode: Mode, settings: Settings, host: Host): Promise<void> {
   if (mode.kind === 'combined') {
     host.removeReady();
+    host.readCredentials();
     host.startBackend();
   }
   const key = host.adminKey(mode);

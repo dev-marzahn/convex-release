@@ -142,8 +142,10 @@ const OUR_LINES = /^\[(convex-release|hook)\]/;
 /**
  * Starts a combined app image on `volume` and waits until it's healthy or has
  * exited. `extra` goes to `docker run`, e.g. `-e CONVEX_RELEASE_SEED=true`.
+ * Without `credentials`, the backend creates its own on the volume, as a bare
+ * `docker run` of the image does.
  */
-async function runCombined(version: string, volume: string, extra: string[] = []): Promise<Run> {
+async function runCombined(version: string, volume: string, extra: string[] = [], { credentials = true } = {}): Promise<Run> {
   const name = container('app');
   spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore' });
   docker(
@@ -153,10 +155,7 @@ async function runCombined(version: string, volume: string, extra: string[] = []
     name,
     '-p',
     `${PORT}:3210`,
-    '-e',
-    'INSTANCE_NAME=e2e',
-    '-e',
-    `INSTANCE_SECRET=${SECRET}`,
+    ...(credentials ? ['-e', 'INSTANCE_NAME=e2e', '-e', `INSTANCE_SECRET=${SECRET}`] : []),
     '-v',
     `${PREFIX}-${volume}:/convex/data`,
     ...extra,
@@ -423,6 +422,22 @@ const scenarios: Record<string, () => Promise<void>> = {
   steps: () => upgradePath(['v1', 'v2', 'v3', 'v4'], 200),
   jump: () => upgradePath(['v1', 'v4'], 200),
   skip: () => upgradePath(['v2', 'v4'], 200),
+
+  /** No INSTANCE_SECRET on a fresh volume: the image creates the credentials once and keeps them. */
+  async firstStart() {
+    let first: string | undefined;
+    for (const start of ['first start', 'restart']) {
+      const run = await runCombined('v4', 'data', [], { credentials: false });
+      expect(run.healthy, `${start} without INSTANCE_SECRET didn't become healthy:\n${run.all}`);
+      const secret = docker('exec', container('app'), 'cat', '/convex/data/credentials/instance_secret').trim();
+      expect(/^[0-9a-f]{64}$/.test(secret), `${start}: the saved instance secret isn't 32 hex bytes`);
+      expect((first ??= secret) === secret, `${start}: the instance secret changed`);
+      expect(!run.all.includes(secret), `${start}: the instance secret appears in the container's output`);
+      if (start === 'first start') await write('v4', 50);
+      log(`  ${start}: deployed with the volume's own credentials`);
+    }
+    expect((await check()).wellFormed === 50, "the restart lost the first start's data");
+  },
 
   async large() {
     await runCombined('v1', 'data');

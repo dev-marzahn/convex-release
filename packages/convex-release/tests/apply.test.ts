@@ -186,6 +186,7 @@ describe('modes', () => {
     const lines: string[] = [];
     const h: Host = {
       release: { version: '2.0.0', relaxed: false },
+      readCredentials: () => events.push('read credentials'),
       startBackend: () => events.push('start backend'),
       removeReady: () => events.push('remove ready file'),
       writeReady: () => events.push('write ready file'),
@@ -210,9 +211,25 @@ describe('modes', () => {
   test('combined: removes the ready file before the backend starts, and writes it only after the post-apply hook', async () => {
     const { run, events, lines } = host({ kind: 'combined', url: 'http://127.0.0.1:3210' }, { pending: 0, empty: false, vars: {} });
     await run();
-    expect(events.slice(0, 4)).toEqual(['remove ready file', 'start backend', 'admin key for combined', 'deployment at http://127.0.0.1:3210']);
+    expect(events.slice(0, 5)).toEqual([
+      'remove ready file',
+      'read credentials',
+      'start backend',
+      'admin key for combined',
+      'deployment at http://127.0.0.1:3210',
+    ]);
     expect(events.slice(-2)).toEqual(['post-apply hook at http://127.0.0.1:3210', 'write ready file']);
     expect(lines.at(-1)).toBe('ready');
+  });
+
+  test('combined: reads the credentials once, before the backend starts and the admin key is derived', async () => {
+    // Both would otherwise create the instance secret on a first start, and
+    // the admin key would not match the backend's.
+    const { run, events } = host({ kind: 'combined', url: 'http://127.0.0.1:3210' }, { pending: 0, empty: false, vars: {} });
+    await run();
+    expect(events.filter((e) => e === 'read credentials')).toHaveLength(1);
+    expect(events.indexOf('read credentials')).toBeLessThan(events.indexOf('start backend'));
+    expect(events.indexOf('read credentials')).toBeLessThan(events.indexOf('admin key for combined'));
   });
 
   test('combined: a failed hook leaves the ready file absent', async () => {
